@@ -1,8 +1,10 @@
 
+import math
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+
 from .. import models, schemas
 from ..database import get_db
 from .auth import get_current_user
@@ -13,17 +15,38 @@ router = APIRouter(
 )
 
 
-def require_family_user(
-    current_user: models.User,
-) -> models.User:
-    """Allow care-request operations only for family accounts."""
+def require_family_user(current_user: models.User) -> models.User:
     if current_user.role != "family":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only family accounts can perform this operation",
         )
-
     return current_user
+
+
+def distance_km(
+    latitude_a: float,
+    longitude_a: float,
+    latitude_b: float,
+    longitude_b: float,
+) -> float:
+    """Calculate the approximate great-circle distance between two points."""
+    earth_radius_km = 6371.0088
+
+    lat_a = math.radians(latitude_a)
+    lat_b = math.radians(latitude_b)
+    delta_lat = math.radians(latitude_b - latitude_a)
+    delta_lon = math.radians(longitude_b - longitude_a)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat_a)
+        * math.cos(lat_b)
+        * math.sin(delta_lon / 2) ** 2
+    )
+
+    a = min(1.0, max(0.0, a))
+    return 2 * earth_radius_km * math.asin(math.sqrt(a))
 
 
 @router.post(
@@ -38,8 +61,6 @@ def create_care_request(
 ):
     require_family_user(current_user)
 
-    # The family owner comes from the verified access token,
-    # never from the request body.
     saved_request = models.CareRequest(
         family_user_id=current_user.id,
         **request.model_dump(),
@@ -49,7 +70,6 @@ def create_care_request(
         db.add(saved_request)
         db.flush()
 
-        # Record the initial status in the same transaction.
         db.add(
             models.CareStatusEvent(
                 care_request_id=saved_request.id,
@@ -60,7 +80,6 @@ def create_care_request(
 
         db.commit()
         db.refresh(saved_request)
-
         return saved_request
 
     except SQLAlchemyError as exc:
@@ -91,9 +110,7 @@ def list_care_requests(
 
     return (
         db.query(models.CareRequest)
-        .filter(
-            models.CareRequest.family_user_id == current_user.id
-        )
+        .filter(models.CareRequest.family_user_id == current_user.id)
         .order_by(models.CareRequest.id.desc())
         .offset(offset)
         .limit(limit)
@@ -122,7 +139,6 @@ def get_care_request(
     )
 
     if care_request is None:
-        # Do not reveal whether another family's request exists.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Care request not found",
@@ -142,36 +158,33 @@ def cancel_care_request(
 ):
     require_family_user(current_user)
 
-    care_request = (
-        db.query(models.CareRequest)
-        .filter(
-            models.CareRequest.id == request_id,
-            models.CareRequest.family_user_id == current_user.id,
-        )
-        .with_for_update()
-        .first()
-    )
-
-    if care_request is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Care request not found",
-        )
-
-    cancellable_statuses = {"pending", "assigned"}
-
-    if care_request.status not in cancellable_statuses:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Cannot cancel a request with status "
-                f"'{care_request.status}'"
-            ),
-        )
-
     try:
-        care_request.status = "cancelled"
+        care_request = (
+            db.query(models.CareRequest)
+            .filter(
+                models.CareRequest.id == request_id,
+                models.CareRequest.family_user_id == current_user.id,
+            )
+            .with_for_update()
+            .first()
+        )
 
+        if care_request is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Care request not found",
+            )
+
+        if care_request.status not in {"pending", "assigned"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot cancel a request with status "
+                    f"'{care_request.status}'"
+                ),
+            )
+
+        care_request.status = "cancelled"
         db.add(
             models.CareStatusEvent(
                 care_request_id=care_request.id,
@@ -182,9 +195,11 @@ def cancel_care_request(
 
         db.commit()
         db.refresh(care_request)
-
         return care_request
 
+    except HTTPException:
+        db.rollback()
+        raise
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
@@ -263,6 +278,37 @@ def assign_helper(
                 detail="This helper is not currently available",
             )
 
+        # Require coordinates for location-based assignment.
+        if (
+            care_request.latitude is None
+            or care_request.longitude is None
+            or helper.latitude is None
+            or helper.longitude is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Location coordinates are required for both the care "
+                    "request and helper profile before assignment"
+                ),
+            )
+
+        distance = distance_km(
+            care_request.latitude,
+            care_request.longitude,
+            helper.latitude,
+            helper.longitude,
+        )
+
+        if distance > helper.service_radius_km:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This helper is outside their service radius "
+                    f"({distance:.1f} km away)"
+                ),
+            )
+
         care_request.helper_id = helper.id
         care_request.status = "assigned"
 
@@ -270,19 +316,23 @@ def assign_helper(
             models.CareStatusEvent(
                 care_request_id=care_request.id,
                 status="assigned",
-                note="Helper assigned to care request",
+                note=(
+                    "Helper assigned after verification, availability, "
+                    "and service-radius checks"
+                ),
             )
         )
 
         db.commit()
         db.refresh(care_request)
-
         return care_request
 
+    except HTTPException:
+        db.rollback()
+        raise
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not assign the helper",
         ) from exc
-

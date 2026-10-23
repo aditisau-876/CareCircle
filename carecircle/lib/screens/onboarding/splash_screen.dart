@@ -1,8 +1,9 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/network/api_client.dart';
+import '../../features/auth/data/auth_service.dart';
+import '../../core/navigation/auth_navigation.dart';
 import 'welcome_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -16,16 +17,37 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
+    _openInitialScreen();
+  }
 
-    Timer(const Duration(seconds: 2), () {
-      if (!mounted) return;
+  Future<void> _openInitialScreen() async {
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
 
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => const WelcomeScreen(),
-        ),
-      );
-    });
+    Widget destination = const WelcomeScreen();
+
+    try {
+      if (await AuthService.hasSession()) {
+        await AuthService.fetchCurrentUser();
+        destination = await AuthNavigation.dashboardForCurrentUser();
+      }
+    } on ApiException catch (error) {
+      // An invalid/expired token is cleared by AuthService. If the backend
+      // is temporarily unreachable, show Welcome rather than blocking startup.
+      debugPrint('CareCircle session restore: ${error.message}');
+      destination = const WelcomeScreen();
+    } catch (error) {
+      debugPrint('CareCircle startup navigation: $error');
+      destination = const WelcomeScreen();
+    }
+
+    if (!mounted) return;
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => destination,
+      ),
+    );
   }
 
   @override

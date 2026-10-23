@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/network/api_client.dart';
 import '../../features/auth/data/auth_service.dart';
-import '../dashboard/family_dashboard_screen.dart';
+import '../../core/navigation/auth_navigation.dart';
 
 class LoginScreen extends StatefulWidget {
 const LoginScreen({super.key});
@@ -32,7 +33,6 @@ Future<void> _login() async {
 FocusScope.of(context).unfocus();
 
 if (_isLoading) return;
-
 if (!_formKey.currentState!.validate()) return;
 
 setState(() {
@@ -45,14 +45,13 @@ email: _emailController.text.trim(),
 password: _passwordController.text,
 );
 
+final destination = await AuthNavigation.dashboardForCurrentUser();
+
 if (!mounted) return;
 
-// Open the family dashboard after successful authentication.
 Navigator.of(context).pushAndRemoveUntil(
-MaterialPageRoute(
-builder: (_) => const FamilyDashboardScreen(
-elderlyName: 'your loved one',
-),
+MaterialPageRoute<void>(
+builder: (_) => destination,
 ),
 (route) => false,
 );
@@ -61,13 +60,15 @@ if (!mounted) return;
 
 debugPrint('CareCircle login error: $error');
 
+final message = error is ApiException
+? error.message
+: 'Login failed. Please check your details and internet connection.';
+
 ScaffoldMessenger.of(context).showSnackBar(
-const SnackBar(
-content: Text(
-'Login failed. Please check your email, password, '
-'and internet connection.',
-),
+SnackBar(
+content: Text(message),
 behavior: SnackBarBehavior.floating,
+duration: const Duration(seconds: 5),
 ),
 );
 } finally {

@@ -94,6 +94,8 @@ class CareRecipientCreate(BaseModel):
         default=None, max_length=60
     )
     address: str = Field(min_length=5, max_length=500)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
     preferred_language: str | None = Field(
         default=None, max_length=60
     )

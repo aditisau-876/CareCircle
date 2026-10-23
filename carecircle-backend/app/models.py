@@ -5,6 +5,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -38,32 +39,18 @@ class CareRecipient(Base):
     __tablename__ = "care_recipients"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    family_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id"), nullable=True, index=True
-    )
+    family_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    relationship_to_family: Mapped[str | None] = mapped_column(
-        String(60), nullable=True
-    )
+    relationship_to_family: Mapped[str | None] = mapped_column(String(60), nullable=True)
     address: Mapped[str] = mapped_column(String(500), nullable=False)
-    preferred_language: Mapped[str | None] = mapped_column(
-        String(60), nullable=True
-    )
-    mobility_needs: Mapped[str | None] = mapped_column(
-        String(150), nullable=True
-    )
-    emergency_contact_name: Mapped[str | None] = mapped_column(
-        String(120), nullable=True
-    )
-    emergency_contact_phone: Mapped[str | None] = mapped_column(
-        String(25), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    preferred_language: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    mobility_needs: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    emergency_contact_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    emergency_contact_phone: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),nullable=False,server_default=func.now())
 
 
 class HelperProfile(Base):

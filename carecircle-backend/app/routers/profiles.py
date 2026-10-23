@@ -43,7 +43,7 @@ def create_recipient(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Could not save the elderly profile",
         ) from exc
 
@@ -88,7 +88,7 @@ def create_helper_profile(
 
     if existing:
         raise HTTPException(
-            status_code=409,
+            status_code=status.HTTP_409_CONFLICT,
             detail="A helper profile already exists for this account",
         )
 
@@ -98,6 +98,8 @@ def create_helper_profile(
         skills=data.skills,
         languages=data.languages,
         service_radius_km=data.service_radius_km,
+        latitude=data.latitude,
+        longitude=data.longitude,
         is_available=False,
         verification_status="pending",
     )
@@ -110,7 +112,7 @@ def create_helper_profile(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=409,
+            status_code=status.HTTP_409_CONFLICT,
             detail="Could not create the helper profile",
         ) from exc
 
@@ -135,7 +137,7 @@ def get_my_helper_profile(
 
     if profile is None:
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="Helper profile not found",
         )
 
