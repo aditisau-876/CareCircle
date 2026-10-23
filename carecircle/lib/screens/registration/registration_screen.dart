@@ -1,8 +1,7 @@
-
-
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../features/auth/data/auth_service.dart';
 import '../helper/helper_registration_screen.dart';
 import 'elderly_profile_screen.dart';
 
@@ -28,6 +27,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   bool _obscurePassword = true;
   bool _acceptedTerms = false;
+  bool _isLoading = false;
 
   String get roleTitle {
     switch (widget.role) {
@@ -64,7 +64,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     super.dispose();
   }
 
-  void _createAccount() {
+  Future<void> _createAccount() async {
+    if (_isLoading) return;
+
     FocusScope.of(context).unfocus();
 
     if (!_formKey.currentState!.validate()) {
@@ -74,33 +76,106 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     if (!_acceptedTerms) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please accept the terms to continue.'),
+          content: Text(
+            'Please accept the Terms of Service and Privacy Policy.',
+          ),
         ),
       );
       return;
     }
 
-    // Frontend demonstration only.
-    // Real account creation will be connected to FastAPI later.
-
-    if (widget.role == 'helper') {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => const HelperRegistrationScreen(),
-        ),
-      );
+    if (!['family', 'elderly', 'helper'].contains(widget.role)) {
+      _showError('Please select a valid account type.');
       return;
     }
 
-    // Family members and care recipients complete the care profile
-    // before entering their role-specific dashboard.
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => ElderlyProfileScreen(
-          role: widget.role,
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Register the account with the FastAPI backend.
+      // The AuthService also saves the returned authentication token.
+      await AuthService.register(
+        fullName: _nameController.text.trim(),
+        email: _emailController.text.trim(),
+        phone: '+91${_phoneController.text.trim().replaceAll(' ', '')}',
+        password: _passwordController.text,
+        role: widget.role,
+      );
+
+      if (!mounted) return;
+
+      // Continue to the appropriate profile-registration flow.
+      if (widget.role == 'helper') {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => const HelperRegistrationScreen(),
+          ),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => ElderlyProfileScreen(
+              role: widget.role,
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+
+      _showError(_friendlyErrorMessage(error));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  String _friendlyErrorMessage(Object error) {
+    final message = error.toString();
+    final lowerMessage = message.toLowerCase();
+
+    if (lowerMessage.contains('socketexception') ||
+        lowerMessage.contains('failed host lookup') ||
+        lowerMessage.contains('connection refused') ||
+        lowerMessage.contains('connection error') ||
+        lowerMessage.contains('timed out') ||
+        lowerMessage.contains('timeout')) {
+      return 'Cannot connect to CareCircle right now. Check that the '
+          'backend is running and your phone is connected to the same Wi-Fi.';
+    }
+
+    if (lowerMessage.contains('already registered') ||
+        lowerMessage.contains('already exists') ||
+        lowerMessage.contains('already taken') ||
+        lowerMessage.contains('duplicate')) {
+      return 'An account with this email or phone number may already exist. '
+          'Please sign in or use different details.';
+    }
+
+    // ApiClient may include a useful server message in its exception.
+    // Keep this fallback readable if the error is not a network issue.
+    if (message.startsWith('ApiException:')) {
+      return message.substring('ApiException:'.length).trim();
+    }
+
+    return 'We could not create your account. Please check your details '
+        'and try again.';
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
         ),
-      ),
-    );
+      );
   }
 
   @override
@@ -108,7 +183,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _isLoading
+              ? null
+              : () => Navigator.of(context).pop(),
           icon: const Icon(Icons.arrow_back_rounded),
         ),
       ),
@@ -151,7 +228,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
                 TextFormField(
                   controller: _nameController,
+                  enabled: !_isLoading,
                   textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     hintText: 'Enter your full name',
                     prefixIcon: Icon(Icons.person_outline_rounded),
@@ -180,14 +259,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
                 TextFormField(
                   controller: _phoneController,
+                  enabled: !_isLoading,
                   keyboardType: TextInputType.phone,
+                  textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     hintText: 'Enter your phone number',
                     prefixIcon: Icon(Icons.phone_outlined),
                     prefixText: '+91  ',
                   ),
                   validator: (value) {
-                    final phone = value?.replaceAll(' ', '') ?? '';
+                    final phone =
+                        value?.replaceAll(RegExp(r'\s+'), '') ?? '';
 
                     if (phone.isEmpty) {
                       return 'Please enter your phone number';
@@ -212,7 +294,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
                 TextFormField(
                   controller: _emailController,
+                  enabled: !_isLoading,
                   keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  autocorrect: false,
                   decoration: const InputDecoration(
                     hintText: 'you@example.com',
                     prefixIcon: Icon(Icons.email_outlined),
@@ -245,12 +330,16 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
                 TextFormField(
                   controller: _passwordController,
+                  enabled: !_isLoading,
                   obscureText: _obscurePassword,
+                  textInputAction: TextInputAction.done,
                   decoration: InputDecoration(
                     hintText: 'Create a secure password',
                     prefixIcon: const Icon(Icons.lock_outline_rounded),
                     suffixIcon: IconButton(
-                      onPressed: () {
+                      onPressed: _isLoading
+                          ? null
+                          : () {
                         setState(() {
                           _obscurePassword = !_obscurePassword;
                         });
@@ -281,18 +370,32 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
                 const SizedBox(height: 12),
 
-                ElevatedButton(
-                  onPressed: _createAccount,
-                  child: const Text('Create account'),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _createAccount,
+                    child: _isLoading
+                        ? const SizedBox(
+                      height: 22,
+                      width: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Colors.white,
+                        ),
+                      ),
+                    )
+                        : const Text('Create account'),
+                  ),
                 ),
 
                 const SizedBox(height: 18),
 
                 Center(
                   child: TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
+                    onPressed: _isLoading
+                        ? null
+                        : () => Navigator.of(context).pop(),
                     child: const Text(
                       'Already have an account? Sign in',
                       style: TextStyle(
@@ -407,7 +510,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         Checkbox(
           value: _acceptedTerms,
           activeColor: CareCircleColors.primary,
-          onChanged: (value) {
+          onChanged: _isLoading
+              ? null
+              : (value) {
             setState(() {
               _acceptedTerms = value ?? false;
             });

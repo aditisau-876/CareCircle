@@ -1,5 +1,7 @@
+
 import 'package:flutter/material.dart';
 
+import '../../core/network/api_client.dart';
 import '../../core/theme/app_theme.dart';
 import '../dashboard/family_dashboard_screen.dart';
 import '../elderly/elderly_dashboard_screen.dart';
@@ -13,7 +15,8 @@ class ElderlyProfileScreen extends StatefulWidget {
   });
 
   @override
-  State<ElderlyProfileScreen> createState() => _ElderlyProfileScreenState();
+  State<ElderlyProfileScreen> createState() =>
+      _ElderlyProfileScreenState();
 }
 
 class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
@@ -28,6 +31,8 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
   String? _relationship;
   String? _language;
   String? _mobility;
+
+  bool _isSaving = false;
 
   final List<String> _relationships = [
     'Parent',
@@ -58,6 +63,7 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
   @override
   void initState() {
     super.initState();
+
     if (widget.role == 'elderly') {
       _relationship = 'Self';
     }
@@ -73,7 +79,9 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
     super.dispose();
   }
 
-  void _continue() {
+  Future<void> _continue() async {
+    if (_isSaving) return;
+
     FocusScope.of(context).unfocus();
 
     if (!_formKey.currentState!.validate()) {
@@ -91,7 +99,122 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
       return;
     }
 
-    final elderlyName = _nameController.text.trim();
+    // The current backend creates recipient profiles only for family users.
+    // An elderly user's own profile endpoint has not been implemented yet.
+    if (widget.role == 'elderly') {
+      _openDashboard(
+        elderlyName: _nameController.text.trim(),
+        profileSaved: false,
+      );
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      final emergencyPhone =
+          '+91${_emergencyPhoneController.text.trim().replaceAll(' ', '')}';
+
+      await ApiClient.post(
+        '/api/profiles/recipients',
+        authenticated: true,
+        body: {
+          'full_name': _nameController.text.trim(),
+          'age': int.parse(_ageController.text.trim()),
+          'relationship_to_family': _relationship,
+          'address': _addressController.text.trim(),
+          'preferred_language': _language,
+          'mobility_needs': _mobility,
+          'emergency_contact_name':
+          _emergencyNameController.text.trim(),
+          'emergency_contact_phone': emergencyPhone,
+        },
+      );
+
+      if (!mounted) return;
+
+      _openDashboard(
+        elderlyName: _nameController.text.trim(),
+        profileSaved: true,
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_friendlyError(error)),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  String _friendlyError(Object error) {
+    final message = error.toString();
+    final lowerMessage = message.toLowerCase();
+
+    if (lowerMessage.contains('socketexception') ||
+        lowerMessage.contains('failed host lookup') ||
+        lowerMessage.contains('connection refused') ||
+        lowerMessage.contains('clientexception') ||
+        lowerMessage.contains('timed out')) {
+      return 'Cannot connect to CareCircle. Check that the backend is running and your phone and computer are connected to the same Wi-Fi.';
+    }
+
+    if (lowerMessage.contains('401') ||
+        lowerMessage.contains('unauthorized') ||
+        lowerMessage.contains('not authenticated')) {
+      return 'Your session may have expired. Please log in again.';
+    }
+
+    if (lowerMessage.contains('403') ||
+        lowerMessage.contains('forbidden')) {
+      return 'Your account does not have permission to save this profile. Please check your account role.';
+    }
+
+    if (lowerMessage.contains('422')) {
+      return 'Some profile details were rejected by the server. Please check the entered information.';
+    }
+
+    if (lowerMessage.contains('400') ||
+        lowerMessage.contains('409')) {
+      return 'The profile could not be saved. Please check the details and try again.';
+    }
+
+    if (error is ApiException) {
+      return message
+          .replaceFirst('ApiException:', '')
+          .trim();
+    }
+
+    return 'Unable to save the profile right now. Please try again.';
+  }
+
+  void _openDashboard({
+    required String elderlyName,
+    required bool profileSaved,
+  }) {
+    if (!mounted) return;
+
+    if (!profileSaved && widget.role == 'elderly') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Your dashboard is opening, but profile details have not '
+                'been saved yet. Self-profile saving needs a backend endpoint.',
+          ),
+          duration: Duration(seconds: 6),
+        ),
+      );
+    }
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
@@ -107,7 +230,9 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _isSaving
+              ? null
+              : () => Navigator.of(context).pop(),
           icon: const Icon(Icons.arrow_back_rounded),
         ),
       ),
@@ -147,6 +272,7 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
 
                 TextFormField(
                   controller: _nameController,
+                  enabled: !_isSaving,
                   textCapitalization: TextCapitalization.words,
                   decoration: const InputDecoration(
                     hintText: 'Enter their full name',
@@ -156,6 +282,11 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
                     if (value == null || value.trim().isEmpty) {
                       return 'Please enter their name';
                     }
+
+                    if (value.trim().length < 2) {
+                      return 'Please enter a valid name';
+                    }
+
                     return null;
                   },
                 ),
@@ -168,20 +299,21 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
 
                 TextFormField(
                   controller: _ageController,
+                  enabled: !_isSaving,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     hintText: 'Enter age',
                     prefixIcon: Icon(Icons.cake_outlined),
                   ),
                   validator: (value) {
-                    final age = int.tryParse(value ?? '');
+                    final age = int.tryParse(value?.trim() ?? '');
 
                     if (age == null) {
                       return 'Please enter a valid age';
                     }
 
                     if (age < 18 || age > 120) {
-                      return 'Please enter a valid age';
+                      return 'Please enter an age between 18 and 120';
                     }
 
                     return null;
@@ -222,6 +354,7 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
 
                 TextFormField(
                   controller: _addressController,
+                  enabled: !_isSaving,
                   maxLines: 3,
                   textCapitalization: TextCapitalization.sentences,
                   decoration: const InputDecoration(
@@ -232,9 +365,10 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
                     ),
                   ),
                   validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Please enter the care address';
+                    if (value == null || value.trim().length < 5) {
+                      return 'Please enter the complete care address';
                     }
+
                     return null;
                   },
                 ),
@@ -294,6 +428,7 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
 
                 TextFormField(
                   controller: _emergencyNameController,
+                  enabled: !_isSaving,
                   textCapitalization: TextCapitalization.words,
                   decoration: const InputDecoration(
                     hintText: 'Enter contact name',
@@ -303,6 +438,7 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
                     if (value == null || value.trim().isEmpty) {
                       return 'Please enter an emergency contact';
                     }
+
                     return null;
                   },
                 ),
@@ -315,6 +451,7 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
 
                 TextFormField(
                   controller: _emergencyPhoneController,
+                  enabled: !_isSaving,
                   keyboardType: TextInputType.phone,
                   decoration: const InputDecoration(
                     hintText: 'Enter phone number',
@@ -322,10 +459,11 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
                     prefixText: '+91  ',
                   ),
                   validator: (value) {
-                    final phone = value?.replaceAll(' ', '') ?? '';
+                    final phone =
+                    (value ?? '').replaceAll(RegExp(r'\s+'), '');
 
-                    if (phone.length != 10) {
-                      return 'Enter a valid 10-digit number';
+                    if (!RegExp(r'^[6-9]\d{9}$').hasMatch(phone)) {
+                      return 'Enter a valid 10-digit Indian mobile number';
                     }
 
                     return null;
@@ -334,9 +472,20 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
 
                 const SizedBox(height: 32),
 
-                ElevatedButton(
-                  onPressed: _continue,
-                  child: const Text('Continue to dashboard'),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isSaving ? null : _continue,
+                    child: _isSaving
+                        ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                      ),
+                    )
+                        : const Text('Continue to dashboard'),
+                  ),
                 ),
 
                 const SizedBox(height: 10),
@@ -421,12 +570,19 @@ class _ElderlyProfileScreenState extends State<ElderlyProfileScreen> {
         prefixIcon: Icon(icon),
       ),
       items: items.map((item) {
-        return DropdownMenuItem(
+        return DropdownMenuItem<String>(
           value: item,
           child: Text(item),
         );
       }).toList(),
-      onChanged: onChanged,
+      onChanged: _isSaving ? null : onChanged,
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please make a selection';
+        }
+
+        return null;
+      },
     );
   }
 }
