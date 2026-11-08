@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../features/care/data/family_care_service.dart';
 import '../care/create_care_request_screen.dart';
 import '../history/care_history_screen.dart';
 import '../profile/family_profile_screen.dart';
@@ -18,9 +19,41 @@ class FamilyDashboardScreen extends StatefulWidget {
       _FamilyDashboardScreenState();
 }
 
-class _FamilyDashboardScreenState
-    extends State<FamilyDashboardScreen> {
+class _FamilyDashboardScreenState extends State<FamilyDashboardScreen> {
   int _currentIndex = 0;
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _requests = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRequests();
+  }
+
+  Future<void> _loadRequests() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    try {
+      final requests = await FamilyCareService.getMyRequests();
+      if (!mounted) return;
+      setState(() {
+        _requests = requests;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
 
   void _openCareRequest({String? service}) {
     Navigator.push(
@@ -31,29 +64,37 @@ class _FamilyDashboardScreenState
           initialService: service,
         ),
       ),
-    );
+    ).then((_) => _loadRequests());
   }
 
   void _openHistory() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => CareHistoryScreen(
-          elderlyName: widget.elderlyName,
-        ),
+        builder: (_) => CareHistoryScreen(elderlyName: widget.elderlyName),
       ),
-    );
+    ).then((_) => _loadRequests());
   }
 
   void _openProfile() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => FamilyProfileScreen(
-          elderlyName: widget.elderlyName,
-        ),
+        builder: (_) => FamilyProfileScreen(elderlyName: widget.elderlyName),
       ),
     );
+  }
+
+  List<Map<String, dynamic>> get _activeRequests => _requests.where((request) {
+        final status = _status(request).toLowerCase();
+        return !{'completed', 'cancelled', 'rejected'}.contains(status);
+      }).toList();
+
+  Map<String, dynamic>? get _nextRequest {
+    if (_activeRequests.isEmpty) return null;
+    final sorted = [..._activeRequests]
+      ..sort((a, b) => _dateTime(a).compareTo(_dateTime(b)));
+    return sorted.first;
   }
 
   @override
@@ -66,190 +107,149 @@ class _FamilyDashboardScreenState
           children: [
             _buildHome(),
             _buildCareTab(),
-            _buildHistoryTab(),
-            _buildProfileTab(),
+            CareHistoryScreen(elderlyName: widget.elderlyName),
+            FamilyProfileScreen(elderlyName: widget.elderlyName),
           ],
         ),
       ),
-      bottomNavigationBar: _buildBottomNavigationBar(),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: (index) {
+          setState(() => _currentIndex = index);
+          if (index == 0 || index == 2) _loadRequests();
+        },
+        backgroundColor: Colors.white,
+        elevation: 0,
+        indicatorColor: CareCircleColors.primaryLight,
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home_rounded),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.volunteer_activism_outlined),
+            selectedIcon: Icon(Icons.volunteer_activism_rounded),
+            label: 'Care',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.history_outlined),
+            selectedIcon: Icon(Icons.history_rounded),
+            label: 'History',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline_rounded),
+            selectedIcon: Icon(Icons.person_rounded),
+            label: 'Profile',
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildHome() {
-    return CustomScrollView(
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
-          sliver: SliverList(
-            delegate: SliverChildListDelegate(
-              [
-                _buildHeader(),
-                const SizedBox(height: 24),
-                _buildCareStatusCard(),
-                const SizedBox(height: 28),
-                _buildSectionHeader(
-                  title: 'Quick care',
-                  subtitle: 'What does your loved one need today?',
-                  actionText: 'View all',
-                  onAction: () {
-                    setState(() {
-                      _currentIndex = 1;
-                    });
-                  },
-                ),
-                const SizedBox(height: 14),
-                _buildQuickCareGrid(),
-                const SizedBox(height: 28),
-                _buildSectionHeader(
-                  title: 'Upcoming care',
-                  subtitle: 'Your next scheduled service',
-                ),
-                const SizedBox(height: 14),
-                _buildUpcomingCareCard(),
-                const SizedBox(height: 28),
-                _buildEmergencyCard(),
-              ],
-            ),
+    return RefreshIndicator(
+      color: CareCircleColors.primary,
+      onRefresh: _loadRequests,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
+        children: [
+          _buildHeader(),
+          const SizedBox(height: 22),
+          _buildHeroCard(),
+          const SizedBox(height: 26),
+          _sectionHeader(
+            'Quick care',
+            'What does your loved one need today?',
+            action: 'View all',
+            onAction: () => setState(() => _currentIndex = 1),
           ),
-        ),
-      ],
+          const SizedBox(height: 14),
+          _buildQuickCareGrid(),
+          const SizedBox(height: 26),
+          _sectionHeader('Your requests', 'Live information from your CareCircle account',
+              action: 'History', onAction: _openHistory),
+          const SizedBox(height: 12),
+          _buildRequestSummary(),
+          const SizedBox(height: 22),
+          _buildEmergencyCard(),
+        ],
+      ),
     );
   }
 
   Widget _buildHeader() {
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12 ? 'Good morning' : (hour < 17 ? 'Good afternoon' : 'Good evening');
     return Row(
       children: [
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Good evening 👋',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: CareCircleColors.textSecondary,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+              Text(greeting, style: const TextStyle(color: CareCircleColors.textSecondary, fontSize: 14)),
               const SizedBox(height: 5),
-              Text(
-                'Care for ${widget.elderlyName}',
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
+              Text('Care for ${widget.elderlyName}', style: Theme.of(context).textTheme.headlineMedium),
             ],
           ),
         ),
-        GestureDetector(
+        InkWell(
           onTap: _openProfile,
+          borderRadius: BorderRadius.circular(30),
           child: Container(
             width: 48,
             height: 48,
             decoration: BoxDecoration(
               color: CareCircleColors.primaryLight,
               shape: BoxShape.circle,
-              border: Border.all(
-                color: CareCircleColors.primary.withValues(
-                  alpha: 0.15,
-                ),
-              ),
+              border: Border.all(color: CareCircleColors.primary.withValues(alpha: .15)),
             ),
-            child: const Icon(
-              Icons.person_outline_rounded,
-              color: CareCircleColors.primary,
-            ),
+            child: const Icon(Icons.person_outline_rounded, color: CareCircleColors.primary),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildCareStatusCard() {
+  Widget _buildHeroCard() {
     return Container(
-      width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [
-            CareCircleColors.primary,
-            CareCircleColors.primaryDark,
-          ],
+          colors: [CareCircleColors.primary, CareCircleColors.primaryDark],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(26),
+        borderRadius: BorderRadius.circular(25),
         boxShadow: [
-          BoxShadow(
-            color: CareCircleColors.primary.withValues(
-              alpha: 0.18,
-            ),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
+          BoxShadow(color: CareCircleColors.primary.withValues(alpha: .16), blurRadius: 18, offset: const Offset(0, 8)),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          const Row(
             children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Icon(
-                  Icons.favorite_rounded,
-                  color: Colors.white,
-                  size: 21,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'CareCircle is here for you',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
+              Icon(Icons.favorite_rounded, color: Colors.white, size: 22),
+              SizedBox(width: 10),
+              Expanded(child: Text('CareCircle is here for you', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700))),
             ],
           ),
+          const SizedBox(height: 14),
+          const Text('Request trusted help for your loved one whenever they need it.', style: TextStyle(color: Colors.white70, height: 1.5, fontSize: 14)),
           const SizedBox(height: 18),
-          const Text(
-            'Request trusted help for your loved one whenever they need it.',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 18),
-          ElevatedButton(
-            onPressed: () => _openCareRequest(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: CareCircleColors.primary,
-              minimumSize: const Size(double.infinity, 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _openCareRequest(),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Request care'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: CareCircleColors.primary,
+                minimumSize: const Size.fromHeight(49),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
               ),
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.add_rounded, size: 21),
-                SizedBox(width: 7),
-                Text(
-                  'Request care',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
             ),
           ),
         ],
@@ -257,12 +257,7 @@ class _FamilyDashboardScreenState
     );
   }
 
-  Widget _buildSectionHeader({
-    required String title,
-    required String subtitle,
-    String? actionText,
-    VoidCallback? onAction,
-  }) {
+  Widget _sectionHeader(String title, String subtitle, {String? action, VoidCallback? onAction}) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
@@ -270,150 +265,61 @@ class _FamilyDashboardScreenState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
+              Text(title, style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  color: CareCircleColors.textSecondary,
-                ),
-              ),
+              Text(subtitle, style: const TextStyle(fontSize: 12.5, color: CareCircleColors.textSecondary)),
             ],
           ),
         ),
-        if (actionText != null)
-          TextButton(
-            onPressed: onAction,
-            child: Text(
-              actionText,
-              style: const TextStyle(
-                color: CareCircleColors.primary,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
+        if (action != null)
+          TextButton(onPressed: onAction, child: Text(action, style: const TextStyle(color: CareCircleColors.primary, fontWeight: FontWeight.w700))),
       ],
     );
   }
 
   Widget _buildQuickCareGrid() {
-    final services = [
-      {
-        'title': 'Medicine',
-        'subtitle': 'Pickup',
-        'icon': Icons.medication_outlined,
-        'color': CareCircleColors.secondary,
-        'background': CareCircleColors.secondaryLight,
-        'service': 'Medicine pickup',
-      },
-      {
-        'title': 'Groceries',
-        'subtitle': 'Pickup',
-        'icon': Icons.shopping_basket_outlined,
-        'color': CareCircleColors.primary,
-        'background': CareCircleColors.primaryLight,
-        'service': 'Grocery pickup',
-      },
-      {
-        'title': 'Appointments',
-        'subtitle': 'Assistance',
-        'icon': Icons.calendar_month_outlined,
-        'color': const Color(0xFF7B61A8),
-        'background': const Color(0xFFEDE8FA),
-        'service': 'Appointment assistance',
-      },
-      {
-        'title': 'Companionship',
-        'subtitle': 'Visit',
-        'icon': Icons.favorite_border_rounded,
-        'color': const Color(0xFFC45C78),
-        'background': const Color(0xFFFCE9EE),
-        'service': 'Companionship',
-      },
-      {
-        'title': 'Hospital',
-        'subtitle': 'Help',
-        'icon': Icons.local_hospital_outlined,
-        'color': const Color(0xFF4E7EA8),
-        'background': const Color(0xFFE8F1FA),
-        'service': 'Accompaniment to hospital',
-      },
-      {
-        'title': 'Household',
-        'subtitle': 'Assistance',
-        'icon': Icons.home_outlined,
-        'color': const Color(0xFF8C704A),
-        'background': const Color(0xFFF2EDE5),
-        'service': 'Household assistance',
-      },
+    final services = <(String, String, IconData)>[
+      ('Medicine', 'Pickup', Icons.medication_outlined),
+      ('Groceries', 'Pickup', Icons.shopping_basket_outlined),
+      ('Appointments', 'Assistance', Icons.calendar_month_outlined),
+      ('Companionship', 'Visit', Icons.favorite_border_rounded),
+      ('Hospital', 'Help', Icons.local_hospital_outlined),
+      ('Household', 'Assistance', Icons.home_outlined),
+    ];
+    const serviceNames = <String>[
+      'Medicine pickup',
+      'Grocery pickup',
+      'Appointment assistance',
+      'Companionship',
+      'Accompaniment to hospital',
+      'Household assistance',
     ];
 
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: services.length,
-      gridDelegate:
-      const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        childAspectRatio: 1.35,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: .95,
       ),
       itemBuilder: (context, index) {
         final item = services[index];
-
         return InkWell(
-          onTap: () => _openCareRequest(
-            service: item['service'] as String,
-          ),
-          borderRadius: BorderRadius.circular(20),
+          onTap: () => _openCareRequest(service: serviceNames[index]),
+          borderRadius: BorderRadius.circular(18),
           child: Container(
-            padding: const EdgeInsets.all(15),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: CareCircleColors.border,
-              ),
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 13),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: CareCircleColors.border)),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Container(
-                  width: 43,
-                  height: 43,
-                  decoration: BoxDecoration(
-                    color: item['background'] as Color,
-                    borderRadius: BorderRadius.circular(13),
-                  ),
-                  child: Icon(
-                    item['icon'] as IconData,
-                    color: item['color'] as Color,
-                    size: 22,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  item['title'] as String,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: CareCircleColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  item['subtitle'] as String,
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    color: CareCircleColors.textSecondary,
-                  ),
-                ),
+                Icon(item.$3, color: CareCircleColors.primary, size: 26),
+                const SizedBox(height: 9),
+                Text(item.$1, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)),
+                Text(item.$2, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: CareCircleColors.textSecondary)),
               ],
             ),
           ),
@@ -422,301 +328,189 @@ class _FamilyDashboardScreenState
     );
   }
 
-  Widget _buildUpcomingCareCard() {
-    return Container(
-      padding: const EdgeInsets.all(17),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(21),
-        border: Border.all(
-          color: CareCircleColors.border,
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              color: CareCircleColors.secondaryLight,
-              borderRadius: BorderRadius.circular(15),
-            ),
-            child: const Icon(
-              Icons.medication_outlined,
-              color: CareCircleColors.secondary,
-            ),
-          ),
-          const SizedBox(width: 13),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Medicine pickup',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: CareCircleColors.textPrimary,
-                  ),
-                ),
-                SizedBox(height: 5),
-                Text(
-                  'No upcoming request',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: CareCircleColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Icon(
-            Icons.chevron_right_rounded,
-            color: CareCircleColors.textSecondary,
-          ),
-        ],
-      ),
-    );
+  Widget _buildRequestSummary() {
+    if (_loading) {
+      return const Card(child: Padding(padding: EdgeInsets.all(22), child: Center(child: CircularProgressIndicator())));
+    }
+    if (_error != null) {
+      return _messageCard(
+        icon: Icons.cloud_off_outlined,
+        title: 'Could not load your requests',
+        message: _error!,
+        action: 'Try again',
+        onAction: _loadRequests,
+      );
+    }
+    final request = _nextRequest;
+    if (request == null) {
+      return _messageCard(
+        icon: Icons.event_available_outlined,
+        title: 'No active care requests',
+        message: _requests.isEmpty ? 'Your submitted care requests will appear here.' : 'You have no pending or ongoing requests right now.',
+        action: 'Request care',
+        onAction: () => _openCareRequest(),
+      );
+    }
+    return _requestCard(request, compact: true);
   }
 
-  Widget _buildEmergencyCard() {
+  Widget _requestCard(Map<String, dynamic> request, {bool compact = false}) {
+    final status = _status(request);
+    final color = _statusColor(status);
+    final id = request['id'];
+    final service = _string(request['service'], 'Care service');
+    final date = _formatDate(request['scheduled_date']);
+    final time = _formatTime(request['scheduled_time']);
     return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF4F2),
-        borderRadius: BorderRadius.circular(21),
-        border: Border.all(
-          color: const Color(0xFFF2D5D0),
-        ),
-      ),
-      child: Row(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(19), border: Border.all(color: CareCircleColors.border)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 45,
-            height: 45,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFCE3DF),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Icon(
-              Icons.emergency_outlined,
-              color: CareCircleColors.danger,
-            ),
+          Row(
+            children: [
+              Expanded(child: Text(service, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary))),
+              _statusPill(status, color),
+            ],
           ),
-          const SizedBox(width: 13),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Need urgent assistance?',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: CareCircleColors.textPrimary,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'Contact your emergency contact or local emergency services.',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    height: 1.4,
-                    color: CareCircleColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          const SizedBox(height: 9),
+          Row(children: [
+            const Icon(Icons.calendar_today_outlined, size: 15, color: CareCircleColors.textSecondary),
+            const SizedBox(width: 6),
+            Expanded(child: Text('$date  •  $time', style: const TextStyle(fontSize: 12, color: CareCircleColors.textSecondary))),
+          ]),
+          if (!compact) ...[
+            const SizedBox(height: 7),
+            Text(_string(request['address'], 'Address not provided'), maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: CareCircleColors.textSecondary)),
+          ],
+          if (id != null) ...[
+            const SizedBox(height: 8),
+            Text('Request #$id', style: const TextStyle(fontSize: 11, color: CareCircleColors.textSecondary)),
+          ],
         ],
       ),
     );
   }
 
   Widget _buildCareTab() {
+    const services = <(String, String, IconData)>[
+      ('Grocery pickup', 'Pick up groceries and essentials', Icons.shopping_basket_outlined),
+      ('Medicine pickup', 'Collect medicines from a pharmacy', Icons.medication_outlined),
+      ('Appointment assistance', 'Help with a scheduled appointment', Icons.calendar_month_outlined),
+      ('Accompaniment to hospital', 'Accompany your loved one', Icons.local_hospital_outlined),
+      ('Household assistance', 'Help with simple household tasks', Icons.home_outlined),
+      ('Document / bill assistance', 'Help with documents and bills', Icons.description_outlined),
+      ('Companionship', 'Spend meaningful time together', Icons.favorite_border_rounded),
+      ('Short walk assistance', 'Support during a short walk', Icons.directions_walk_outlined),
+    ];
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
       children: [
-        Text(
-          'Request care',
-          style: Theme.of(context).textTheme.headlineMedium,
-        ),
+        Text('Request care', style: Theme.of(context).textTheme.headlineMedium),
         const SizedBox(height: 7),
-        const Text(
-          'Choose the type of support your loved one needs.',
-          style: TextStyle(
-            color: CareCircleColors.textSecondary,
-            fontSize: 14,
-          ),
-        ),
-        const SizedBox(height: 22),
-        _buildAllServices(),
-      ],
-    );
-  }
-
-  Widget _buildAllServices() {
-    final services = [
-      (
-      'Grocery pickup',
-      'Pick up groceries and essentials',
-      Icons.shopping_basket_outlined,
-      ),
-      (
-      'Medicine pickup',
-      'Collect medicines from a pharmacy',
-      Icons.medication_outlined,
-      ),
-      (
-      'Appointment assistance',
-      'Help with a scheduled appointment',
-      Icons.calendar_month_outlined,
-      ),
-      (
-      'Accompaniment to hospital',
-      'Accompany your loved one',
-      Icons.local_hospital_outlined,
-      ),
-      (
-      'Household assistance',
-      'Help with simple household tasks',
-      Icons.home_outlined,
-      ),
-      (
-      'Document / bill assistance',
-      'Help with documents and bills',
-      Icons.description_outlined,
-      ),
-      (
-      'Companionship',
-      'Spend meaningful time together',
-      Icons.favorite_border_rounded,
-      ),
-      (
-      'Short walk assistance',
-      'Support during a short walk',
-      Icons.directions_walk_outlined,
-      ),
-    ];
-
-    return Column(
-      children: services.map((item) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
+        const Text('Choose the type of support your loved one needs.', style: TextStyle(color: CareCircleColors.textSecondary, fontSize: 14)),
+        const SizedBox(height: 20),
+        ...services.map((item) => Padding(
+          padding: const EdgeInsets.only(bottom: 11),
           child: InkWell(
-            onTap: () => _openCareRequest(
-              service: item.$1,
-            ),
+            onTap: () => _openCareRequest(service: item.$1),
             borderRadius: BorderRadius.circular(18),
             child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: CareCircleColors.border,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: CareCircleColors.primaryLight,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(
-                      item.$3,
-                      color: CareCircleColors.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment:
-                      CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          item.$1,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color:
-                            CareCircleColors.textPrimary,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          item.$2,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color:
-                            CareCircleColors.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Icon(
-                    Icons.arrow_forward_ios_rounded,
-                    size: 15,
-                    color: CareCircleColors.textSecondary,
-                  ),
-                ],
-              ),
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: CareCircleColors.border)),
+              child: Row(children: [
+                Container(width: 47, height: 47, decoration: BoxDecoration(color: CareCircleColors.primaryLight, borderRadius: BorderRadius.circular(14)), child: Icon(item.$3, color: CareCircleColors.primary)),
+                const SizedBox(width: 13),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(item.$1, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)),
+                  const SizedBox(height: 3),
+                  Text(item.$2, style: const TextStyle(fontSize: 12, color: CareCircleColors.textSecondary)),
+                ])),
+                const Icon(Icons.chevron_right_rounded, color: CareCircleColors.textSecondary),
+              ]),
             ),
           ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildHistoryTab() {
-    return CareHistoryScreen(
-      elderlyName: widget.elderlyName,
-    );
-  }
-
-  Widget _buildProfileTab() {
-    return FamilyProfileScreen(
-      elderlyName: widget.elderlyName,
-    );
-  }
-
-  Widget _buildBottomNavigationBar() {
-    return NavigationBar(
-      selectedIndex: _currentIndex,
-      onDestinationSelected: (index) {
-        setState(() {
-          _currentIndex = index;
-        });
-      },
-      backgroundColor: Colors.white,
-      elevation: 0,
-      indicatorColor: CareCircleColors.primaryLight,
-      destinations: const [
-        NavigationDestination(
-          icon: Icon(Icons.home_outlined),
-          selectedIcon: Icon(Icons.home_rounded),
-          label: 'Home',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.volunteer_activism_outlined),
-          selectedIcon: Icon(Icons.volunteer_activism_rounded),
-          label: 'Care',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.history_outlined),
-          selectedIcon: Icon(Icons.history_rounded),
-          label: 'History',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.person_outline_rounded),
-          selectedIcon: Icon(Icons.person_rounded),
-          label: 'Profile',
-        ),
+        )),
       ],
     );
+  }
+
+  Widget _buildEmergencyCard() {
+    return Container(
+      padding: const EdgeInsets.all(17),
+      decoration: BoxDecoration(color: const Color(0xFFFFF4F2), borderRadius: BorderRadius.circular(19), border: Border.all(color: const Color(0xFFF2D5D0))),
+      child: const Row(children: [
+        Icon(Icons.emergency_outlined, color: CareCircleColors.danger, size: 27),
+        SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Need urgent assistance?', style: TextStyle(fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)),
+          SizedBox(height: 4),
+          Text('Contact your emergency contact or local emergency services.', style: TextStyle(fontSize: 12, height: 1.4, color: CareCircleColors.textSecondary)),
+        ])),
+      ]),
+    );
+  }
+
+  Widget _messageCard({required IconData icon, required String title, required String message, String? action, VoidCallback? onAction}) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: CareCircleColors.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Icon(icon, color: CareCircleColors.primary), const SizedBox(width: 9), Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)))]),
+        const SizedBox(height: 8),
+        Text(message, style: const TextStyle(fontSize: 12.5, color: CareCircleColors.textSecondary, height: 1.4)),
+        if (action != null) ...[
+          const SizedBox(height: 8),
+          Align(alignment: Alignment.centerRight, child: TextButton(onPressed: onAction, child: Text(action))),
+        ],
+      ]),
+    );
+  }
+
+  Widget _statusPill(String status, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(color: color.withValues(alpha: .10), borderRadius: BorderRadius.circular(20)),
+      child: Text(_prettyStatus(status), style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: color)),
+    );
+  }
+
+  String _status(Map<String, dynamic> request) => _string(request['status'], 'pending');
+  String _string(dynamic value, String fallback) => value == null || value.toString().trim().isEmpty ? fallback : value.toString();
+  DateTime _dateTime(Map<String, dynamic> request) {
+    final date = DateTime.tryParse(_string(request['scheduled_date'], '')) ?? DateTime(2100);
+    final timeParts = _string(request['scheduled_time'], '00:00').split(':');
+    final hour = int.tryParse(timeParts.first) ?? 0;
+    final minute = timeParts.length > 1 ? int.tryParse(timeParts[1]) ?? 0 : 0;
+    return DateTime(date.year, date.month, date.day, hour, minute);
+  }
+  String _formatDate(dynamic value) {
+    final date = DateTime.tryParse(_string(value, ''));
+    if (date == null) return 'Date not set';
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
+  }
+  String _formatTime(dynamic value) {
+    final raw = _string(value, '');
+    final parts = raw.split(':');
+    if (parts.length < 2) return raw.isEmpty ? 'Time not set' : raw;
+    final hour = int.tryParse(parts[0]) ?? 0;
+    final minute = parts[1];
+    final suffix = hour >= 12 ? 'PM' : 'AM';
+    final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+    return '$displayHour:$minute $suffix';
+  }
+  String _prettyStatus(String value) => value.replaceAll('_', ' ').split(' ').map((word) => word.isEmpty ? word : '${word[0].toUpperCase()}${word.substring(1)}').join(' ');
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed': return CareCircleColors.success;
+      case 'cancelled':
+      case 'rejected': return CareCircleColors.danger;
+      case 'assigned':
+      case 'on_the_way':
+      case 'arrived':
+      case 'task_started': return const Color(0xFF3978A8);
+      default: return const Color(0xFFB7791F);
+    }
   }
 }

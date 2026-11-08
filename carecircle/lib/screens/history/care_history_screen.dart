@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../features/care/data/family_care_service.dart';
 
 class CareHistoryScreen extends StatefulWidget {
   final String elderlyName;
@@ -11,99 +12,84 @@ class CareHistoryScreen extends StatefulWidget {
   });
 
   @override
-  State<CareHistoryScreen> createState() =>
-      _CareHistoryScreenState();
+  State<CareHistoryScreen> createState() => _CareHistoryScreenState();
 }
 
 class _CareHistoryScreenState extends State<CareHistoryScreen> {
   String _selectedFilter = 'All';
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _requests = [];
 
-  final List<Map<String, dynamic>> _history = [
-    {
-      'service': 'Medicine pickup',
-      'date': 'September 20, 2026',
-      'time': '5:00 PM',
-      'status': 'Completed',
-      'amount': '₹450.00',
-      'fee': '₹100.00',
-      'helper': 'Ananya Sharma',
-      'icon': Icons.medication_outlined,
-    },
-    {
-      'service': 'Grocery pickup',
-      'date': 'September 16, 2026',
-      'time': '11:30 AM',
-      'status': 'Completed',
-      'amount': '₹820.00',
-      'fee': '₹100.00',
-      'helper': 'Rahul Das',
-      'icon': Icons.shopping_basket_outlined,
-    },
-    {
-      'service': 'Appointment assistance',
-      'date': 'September 10, 2026',
-      'time': '3:00 PM',
-      'status': 'Completed',
-      'amount': '₹0.00',
-      'fee': '₹100.00',
-      'helper': 'Priya Sen',
-      'icon': Icons.calendar_month_outlined,
-    },
-    {
-      'service': 'Companionship',
-      'date': 'September 4, 2026',
-      'time': '6:00 PM',
-      'status': 'Completed',
-      'amount': '₹0.00',
-      'fee': '₹100.00',
-      'helper': 'Ananya Sharma',
-      'icon': Icons.favorite_border_rounded,
-    },
+  static const List<String> _filters = [
+    'All',
+    'Active',
+    'Completed',
+    'Cancelled',
   ];
 
-  List<Map<String, dynamic>> get _filteredHistory {
-    if (_selectedFilter == 'All') {
-      return _history;
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
+
+  Future<void> _loadHistory() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
     }
 
-    return _history.where((item) {
-      return item['service'] == _selectedFilter;
+    try {
+      final result = await FamilyCareService.getMyRequests(limit: 100);
+      if (!mounted) return;
+      setState(() {
+        _requests = result;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> get _filteredRequests {
+    final filtered = _requests.where((request) {
+      final status = _status(request).toLowerCase();
+      switch (_selectedFilter) {
+        case 'Active':
+          return !{'completed', 'cancelled', 'rejected'}.contains(status);
+        case 'Completed':
+          return status == 'completed';
+        case 'Cancelled':
+          return status == 'cancelled' || status == 'rejected';
+        default:
+          return true;
+      }
     }).toList();
+
+    filtered.sort((a, b) => _dateTime(b).compareTo(_dateTime(a)));
+    return filtered;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Care history'),
-      ),
+      backgroundColor: CareCircleColors.background,
+      appBar: AppBar(title: const Text('Care history')),
       body: SafeArea(
         child: Column(
           children: [
             _buildHeader(),
             const SizedBox(height: 16),
             _buildFilters(),
-            const SizedBox(height: 16),
-            Expanded(
-              child: _filteredHistory.isEmpty
-                  ? _buildEmptyState()
-                  : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(
-                  20,
-                  0,
-                  20,
-                  30,
-                ),
-                itemCount: _filteredHistory.length,
-                separatorBuilder: (_, __) =>
-                const SizedBox(height: 14),
-                itemBuilder: (context, index) {
-                  return _buildHistoryCard(
-                    _filteredHistory[index],
-                  );
-                },
-              ),
-            ),
+            const SizedBox(height: 14),
+            Expanded(child: _buildBody()),
           ],
         ),
       ),
@@ -112,61 +98,34 @@ class _CareHistoryScreenState extends State<CareHistoryScreen> {
 
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        20,
-        8,
-        20,
-        0,
-      ),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(19),
         decoration: BoxDecoration(
           color: CareCircleColors.primaryLight,
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(21),
         ),
         child: Row(
           children: [
             Container(
-              width: 52,
-              height: 52,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.history_rounded,
-                color: CareCircleColors.primary,
-                size: 28,
-              ),
+              width: 50,
+              height: 50,
+              decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+              child: const Icon(Icons.history_rounded, color: CareCircleColors.primary, size: 27),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 13),
             Expanded(
               child: Column(
-                crossAxisAlignment:
-                CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Your care history',
-                    style: TextStyle(
-                      fontSize: 19,
-                      fontWeight: FontWeight.w700,
-                      color:
-                      CareCircleColors.textPrimary,
-                    ),
-                  ),
+                  const Text('Your care requests', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)),
                   const SizedBox(height: 4),
-                  Text(
-                    'Past care services for ${widget.elderlyName}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color:
-                      CareCircleColors.textSecondary,
-                    ),
-                  ),
+                  Text('Requests for ${widget.elderlyName}', style: const TextStyle(fontSize: 12, color: CareCircleColors.textSecondary)),
                 ],
               ),
             ),
+            Text('${_requests.length}', style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w800, color: CareCircleColors.primary)),
           ],
         ),
       ),
@@ -174,497 +133,244 @@ class _CareHistoryScreenState extends State<CareHistoryScreen> {
   }
 
   Widget _buildFilters() {
-    final filters = [
-      'All',
-      'Medicine pickup',
-      'Grocery pickup',
-      'Appointment assistance',
-      'Companionship',
-    ];
-
     return SizedBox(
-      height: 42,
+      height: 40,
       child: ListView.separated(
-        padding: const EdgeInsets.symmetric(
-          horizontal: 20,
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         scrollDirection: Axis.horizontal,
-        itemCount: filters.length,
-        separatorBuilder: (_, __) =>
-        const SizedBox(width: 8),
+        itemCount: _filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-          final filter = filters[index];
-          final selected =
-              _selectedFilter == filter;
-
+          final filter = _filters[index];
+          final selected = _selectedFilter == filter;
           return ChoiceChip(
             label: Text(filter),
             selected: selected,
-            onSelected: (_) {
-              setState(() {
-                _selectedFilter = filter;
-              });
-            },
-            selectedColor:
-            CareCircleColors.primary,
+            onSelected: (_) => setState(() => _selectedFilter = filter),
+            selectedColor: CareCircleColors.primary,
             backgroundColor: Colors.white,
-            side: BorderSide(
-              color: selected
-                  ? CareCircleColors.primary
-                  : CareCircleColors.border,
-            ),
-            labelStyle: TextStyle(
-              color: selected
-                  ? Colors.white
-                  : CareCircleColors.textPrimary,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius:
-              BorderRadius.circular(20),
-            ),
+            side: BorderSide(color: selected ? CareCircleColors.primary : CareCircleColors.border),
+            labelStyle: TextStyle(color: selected ? Colors.white : CareCircleColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w600),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           );
         },
       ),
     );
   }
 
-  Widget _buildHistoryCard(
-      Map<String, dynamic> item,
-      ) {
-    final String service =
-    item['service'] as String;
-    final String date =
-    item['date'] as String;
-    final String time =
-    item['time'] as String;
-    final String status =
-    item['status'] as String;
-    final String amount =
-    item['amount'] as String;
-    final String fee =
-    item['fee'] as String;
-    final String helper =
-    item['helper'] as String;
-    final IconData icon =
-    item['icon'] as IconData;
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(22),
-      onTap: () {
-        _showHistoryDetails(item);
-      },
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(
-            color: CareCircleColors.border,
+  Widget _buildBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(color: CareCircleColors.primary));
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(26),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_outlined, size: 42, color: CareCircleColors.textSecondary),
+              const SizedBox(height: 12),
+              const Text('Could not load care history', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)),
+              const SizedBox(height: 7),
+              Text(_error!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: CareCircleColors.textSecondary)),
+              const SizedBox(height: 12),
+              ElevatedButton(onPressed: _loadHistory, child: const Text('Try again')),
+            ],
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(
-                alpha: 0.025,
-              ),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
         ),
-        child: Column(
+      );
+    }
+
+    final items = _filteredRequests;
+    if (items.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _loadHistory,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            Row(
-              crossAxisAlignment:
-              CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    color:
-                    CareCircleColors.primaryLight,
-                    borderRadius:
-                    BorderRadius.circular(16),
-                  ),
-                  child: Icon(
-                    icon,
-                    color:
-                    CareCircleColors.primary,
-                    size: 27,
-                  ),
-                ),
-                const SizedBox(width: 13),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment:
-                    CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        service,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight:
-                          FontWeight.w700,
-                          color:
-                          CareCircleColors
-                              .textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        '$date • $time',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color:
-                          CareCircleColors
-                              .textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding:
-                  const EdgeInsets.symmetric(
-                    horizontal: 9,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color:
-                    const Color(0xFFEAF6EF),
-                    borderRadius:
-                    BorderRadius.circular(20),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(
-                        Icons.check_circle_rounded,
-                        size: 13,
-                        color:
-                        CareCircleColors
-                            .success,
-                      ),
-                      SizedBox(width: 4),
-                      Text(
-                        'Completed',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight:
-                          FontWeight.w700,
-                          color:
-                          CareCircleColors
-                              .success,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 17),
-            Container(
-              width: double.infinity,
-              height: 1,
-              color: CareCircleColors.border,
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                const Icon(
-                  Icons.person_outline_rounded,
-                  size: 17,
-                  color:
-                  CareCircleColors.textSecondary,
-                ),
-                const SizedBox(width: 7),
-                Expanded(
-                  child: Text(
-                    helper,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color:
-                      CareCircleColors
-                          .textSecondary,
-                    ),
-                  ),
-                ),
-                const Icon(
-                  Icons.receipt_long_outlined,
-                  size: 17,
-                  color:
-                  CareCircleColors.textSecondary,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  amount == '₹0.00'
-                      ? 'Service only'
-                      : amount,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight:
-                    FontWeight.w600,
-                    color:
-                    CareCircleColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(width: 7),
-                const Icon(
-                  Icons.chevron_right_rounded,
-                  size: 20,
-                  color:
-                  CareCircleColors.textSecondary,
-                ),
-              ],
-            ),
+            const SizedBox(height: 75),
+            Icon(Icons.event_note_rounded, size: 54, color: CareCircleColors.primary.withValues(alpha: .55)),
+            const SizedBox(height: 16),
+            const Text('No care requests found', textAlign: TextAlign.center, style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)),
+            const SizedBox(height: 7),
+            const Text('Your submitted care requests will appear here.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: CareCircleColors.textSecondary)),
           ],
         ),
+      );
+    }
+
+    return RefreshIndicator(
+      color: CareCircleColors.primary,
+      onRefresh: _loadHistory,
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 12),
+        itemBuilder: (context, index) => _buildRequestCard(items[index]),
       ),
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(30),
+  Widget _buildRequestCard(Map<String, dynamic> request) {
+    final service = _string(request['service'], 'Care service');
+    final status = _status(request);
+    final color = _statusColor(status);
+    final id = request['id'];
+    return InkWell(
+      onTap: () => _showRequestDetails(request),
+      borderRadius: BorderRadius.circular(19),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(19), border: Border.all(color: CareCircleColors.border)),
         child: Column(
-          mainAxisAlignment:
-          MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 76,
-              height: 76,
-              decoration: BoxDecoration(
-                color:
-                CareCircleColors.primaryLight,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.history_rounded,
-                size: 38,
-                color:
-                CareCircleColors.primary,
-              ),
+            Row(
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(color: CareCircleColors.primaryLight, borderRadius: BorderRadius.circular(14)),
+                  child: Icon(_serviceIcon(service), color: CareCircleColors.primary, size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Text(service, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary))),
+                _statusBadge(status, color),
+              ],
             ),
-            const SizedBox(height: 18),
-            const Text(
-              'No care history found',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-                color:
-                CareCircleColors.textPrimary,
-              ),
-            ),
+            const SizedBox(height: 13),
+            Row(children: [
+              const Icon(Icons.calendar_today_outlined, size: 14, color: CareCircleColors.textSecondary),
+              const SizedBox(width: 6),
+              Expanded(child: Text('${_formatDate(request['scheduled_date'])}  •  ${_formatTime(request['scheduled_time'])}', style: const TextStyle(fontSize: 12, color: CareCircleColors.textSecondary))),
+              if (id != null) Text('#$id', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: CareCircleColors.textSecondary)),
+            ]),
             const SizedBox(height: 8),
-            const Text(
-              'Completed care services will appear here.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                height: 1.45,
-                color:
-                CareCircleColors.textSecondary,
-              ),
-            ),
+            Row(children: [
+              const Icon(Icons.location_on_outlined, size: 14, color: CareCircleColors.textSecondary),
+              const SizedBox(width: 6),
+              Expanded(child: Text(_string(request['address'], 'Address not available'), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5, color: CareCircleColors.textSecondary))),
+              const Icon(Icons.chevron_right_rounded, color: CareCircleColors.textSecondary),
+            ]),
           ],
         ),
       ),
     );
   }
 
-  void _showHistoryDetails(
-      Map<String, dynamic> item,
-      ) {
-    final String service =
-    item['service'] as String;
-    final String date =
-    item['date'] as String;
-    final String time =
-    item['time'] as String;
-    final String amount =
-    item['amount'] as String;
-    final String fee =
-    item['fee'] as String;
-    final String helper =
-    item['helper'] as String;
-
-    showModalBottomSheet(
+  void _showRequestDetails(Map<String, dynamic> request) {
+    final status = _status(request);
+    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.fromLTRB(
-            20,
-            10,
-            20,
-            30,
+      builder: (sheetContext) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+        decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(child: Container(width: 42, height: 5, decoration: BoxDecoration(color: CareCircleColors.border, borderRadius: BorderRadius.circular(10)))),
+              const SizedBox(height: 20),
+              const Text('Request details', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)),
+              const SizedBox(height: 15),
+              _detailRow('Request ID', request['id']?.toString() ?? 'Not available'),
+              _detailRow('Service', _string(request['service'], 'Not specified')),
+              _detailRow('For', _string(request['elderly_name'], widget.elderlyName)),
+              _detailRow('Date', _formatDate(request['scheduled_date'])),
+              _detailRow('Time', _formatTime(request['scheduled_time'])),
+              _detailRow('Status', _prettyStatus(status)),
+              _detailRow('Address', _string(request['address'], 'Not provided')),
+              if (_string(request['duration'], '').isNotEmpty) _detailRow('Duration', _string(request['duration'], '')),
+              if (_string(request['mobility'], '').isNotEmpty) _detailRow('Mobility needs', _string(request['mobility'], '')),
+              if (_string(request['language'], '').isNotEmpty) _detailRow('Preferred language', _string(request['language'], '')),
+              if (_string(request['instructions'], '').isNotEmpty) _detailRow('Instructions', _string(request['instructions'], '')),
+              const SizedBox(height: 15),
+              SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () => Navigator.pop(sheetContext), child: const Text('Close'))),
+            ],
           ),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(
-              top: Radius.circular(28),
-            ),
-          ),
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment:
-              CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 42,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color:
-                      CareCircleColors.border,
-                      borderRadius:
-                      BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 22),
-                const Text(
-                  'Care details',
-                  style: TextStyle(
-                    fontSize: 23,
-                    fontWeight:
-                    FontWeight.w700,
-                    color:
-                    CareCircleColors
-                        .textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                _detailRow(
-                  'Service',
-                  service,
-                ),
-                _detailRow(
-                  'Date',
-                  date,
-                ),
-                _detailRow(
-                  'Time',
-                  time,
-                ),
-                _detailRow(
-                  'Helper',
-                  helper,
-                ),
-                const Divider(
-                  height: 24,
-                ),
-                _detailRow(
-                  'Purchase / service',
-                  amount,
-                ),
-                _detailRow(
-                  'CareCircle fee',
-                  fee,
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding:
-                  const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color:
-                    CareCircleColors
-                        .primaryLight,
-                    borderRadius:
-                    BorderRadius.circular(15),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(
-                        Icons.receipt_long_outlined,
-                        color:
-                        CareCircleColors
-                            .primary,
-                      ),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Receipt and care notes are available for this completed service.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            height: 1.4,
-                            color:
-                            CareCircleColors
-                                .textPrimary,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.of(context)
-                          .pop();
-                    },
-                    child: const Text(
-                      'Close',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  Widget _detailRow(
-      String title,
-      String value,
-      ) {
+  Widget _detailRow(String label, String value) {
     return Padding(
-      padding:
-      const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment:
-        CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(
-              title,
-              style: const TextStyle(
-                fontSize: 13,
-                color:
-                CareCircleColors
-                    .textSecondary,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight:
-                FontWeight.w600,
-                color:
-                CareCircleColors
-                    .textPrimary,
-              ),
-            ),
-          ),
-        ],
-      ),
+      padding: const EdgeInsets.only(bottom: 11),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(width: 115, child: Text(label, style: const TextStyle(fontSize: 12.5, color: CareCircleColors.textSecondary))),
+        Expanded(child: Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: CareCircleColors.textPrimary))),
+      ]),
     );
+  }
+
+  Widget _statusBadge(String status, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(color: color.withValues(alpha: .10), borderRadius: BorderRadius.circular(20)),
+      child: Text(_prettyStatus(status), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+    );
+  }
+
+  String _status(Map<String, dynamic> request) => _string(request['status'], 'pending');
+  String _string(dynamic value, String fallback) => value == null || value.toString().trim().isEmpty ? fallback : value.toString();
+
+  DateTime _dateTime(Map<String, dynamic> request) {
+    final date = DateTime.tryParse(_string(request['scheduled_date'], '')) ?? DateTime(1970);
+    final parts = _string(request['scheduled_time'], '00:00').split(':');
+    final hour = int.tryParse(parts.first) ?? 0;
+    final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
+    return DateTime(date.year, date.month, date.day, hour, minute);
+  }
+
+  String _formatDate(dynamic value) {
+    final date = DateTime.tryParse(_string(value, ''));
+    if (date == null) return 'Not scheduled';
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
+  }
+
+  String _formatTime(dynamic value) {
+    final raw = _string(value, '');
+    final parts = raw.split(':');
+    if (parts.length < 2) return raw.isEmpty ? 'Not set' : raw;
+    final hour = int.tryParse(parts[0]) ?? 0;
+    final minute = parts[1];
+    final suffix = hour >= 12 ? 'PM' : 'AM';
+    final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+    return '$displayHour:$minute $suffix';
+  }
+
+  String _prettyStatus(String value) => value.replaceAll('_', ' ').split(' ').map((word) => word.isEmpty ? word : '${word[0].toUpperCase()}${word.substring(1)}').join(' ');
+
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed': return CareCircleColors.success;
+      case 'cancelled':
+      case 'rejected': return CareCircleColors.danger;
+      case 'assigned':
+      case 'on_the_way':
+      case 'arrived':
+      case 'task_started': return const Color(0xFF3978A8);
+      default: return const Color(0xFFB7791F);
+    }
+  }
+
+  IconData _serviceIcon(String service) {
+    final value = service.toLowerCase();
+    if (value.contains('medicine')) return Icons.medication_outlined;
+    if (value.contains('grocery')) return Icons.shopping_basket_outlined;
+    if (value.contains('appointment')) return Icons.calendar_month_outlined;
+    if (value.contains('hospital')) return Icons.local_hospital_outlined;
+    if (value.contains('household')) return Icons.home_outlined;
+    if (value.contains('document') || value.contains('bill')) return Icons.description_outlined;
+    if (value.contains('walk')) return Icons.directions_walk_outlined;
+    if (value.contains('companionship')) return Icons.favorite_border_rounded;
+    return Icons.volunteer_activism_outlined;
   }
 }

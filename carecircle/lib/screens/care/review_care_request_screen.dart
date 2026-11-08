@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../core/network/api_client.dart';
 import '../../core/theme/app_theme.dart';
+import '../../features/care/data/care_request_service.dart';
 import 'request_submitted_screen.dart';
 
-class ReviewCareRequestScreen extends StatelessWidget {
+class ReviewCareRequestScreen extends StatefulWidget {
   final String elderlyName;
   final String service;
   final DateTime date;
@@ -29,22 +31,19 @@ class ReviewCareRequestScreen extends StatelessWidget {
     required this.familySharing,
   });
 
+  @override
+  State<ReviewCareRequestScreen> createState() =>
+      _ReviewCareRequestScreenState();
+}
+
+class _ReviewCareRequestScreenState extends State<ReviewCareRequestScreen> {
+  bool _isSubmitting = false;
+
   String _formatDate(DateTime value) {
     const months = [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
     ];
-
     return '${value.day} ${months[value.month - 1]} ${value.year}';
   }
 
@@ -52,27 +51,62 @@ class ReviewCareRequestScreen extends StatelessWidget {
     final hour = value.hourOfPeriod == 0 ? 12 : value.hourOfPeriod;
     final minute = value.minute.toString().padLeft(2, '0');
     final period = value.period == DayPeriod.am ? 'AM' : 'PM';
-
     return '$hour:$minute $period';
   }
 
-  void _confirmRequest(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RequestSubmittedScreen(
-          elderlyName: elderlyName,
-          service: service,
-          date: date,
-          time: time,
-          address: address,
-          duration: duration,
-          mobility: mobility,
-          language: language,
-          instructions: instructions,
-          familySharing: familySharing,
+  Future<void> _confirmRequest() async {
+    if (_isSubmitting) return;
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final savedRequest = await CareRequestService.createRequest(
+        elderlyName: widget.elderlyName,
+        service: widget.service,
+        address: widget.address,
+        date: widget.date,
+        time: _formatTime(widget.time),
+        duration: widget.duration,
+        mobility: widget.mobility,
+        language: widget.language,
+        instructions: widget.instructions,
+        familySharing: widget.familySharing,
+      );
+
+      if (!mounted) return;
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => RequestSubmittedScreen(
+            requestId: savedRequest['id'] as int,
+            elderlyName: widget.elderlyName,
+            service: widget.service,
+            date: widget.date,
+            time: widget.time,
+            address: widget.address,
+            status: savedRequest['status'] as String? ?? 'pending',
+          ),
         ),
-      ),
-    );
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Something went wrong while submitting the request.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override
@@ -80,12 +114,7 @@ class ReviewCareRequestScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: CareCircleColors.background,
       appBar: AppBar(
-        title: const Text(
-          'Review request',
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        title: const Text('Review request'),
         centerTitle: true,
       ),
       body: SafeArea(
@@ -93,370 +122,186 @@ class ReviewCareRequestScreen extends StatelessWidget {
           children: [
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(
-                  20,
-                  8,
-                  20,
-                  24,
-                ),
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildProgressIndicator(),
-
+                    _progressIndicator(),
                     const SizedBox(height: 28),
-
                     Text(
                       'Everything looks good?',
-                      style:
-                      Theme.of(context).textTheme.headlineMedium,
+                      style: Theme.of(context).textTheme.headlineMedium,
                     ),
-
                     const SizedBox(height: 8),
-
                     const Text(
-                      'Review the care request before we start looking for a suitable helper.',
+                      'Please review the details. Your request will be saved to your CareCircle account.',
                       style: TextStyle(
                         color: CareCircleColors.textSecondary,
                         fontSize: 14,
                         height: 1.5,
                       ),
                     ),
-
-                    const SizedBox(height: 24),
-
-                    _buildMainRequestCard(),
-
+                    const SizedBox(height: 22),
+                    _mainCard(),
                     const SizedBox(height: 16),
-
-                    _buildCareLocationCard(),
-
+                    _detailCard(
+                      title: 'Schedule and location',
+                      icon: Icons.location_on_outlined,
+                      rows: [
+                        _row(Icons.calendar_today_outlined, 'Date', _formatDate(widget.date)),
+                        _row(Icons.schedule_outlined, 'Time', _formatTime(widget.time)),
+                        _row(Icons.location_on_outlined, 'Address', widget.address),
+                      ],
+                    ),
                     const SizedBox(height: 16),
-
-                    _buildSupportDetailsCard(),
-
+                    _detailCard(
+                      title: 'Care preferences',
+                      icon: Icons.volunteer_activism_outlined,
+                      rows: [
+                        _row(Icons.timelapse_rounded, 'Duration', widget.duration),
+                        _row(Icons.accessible_forward_rounded, 'Mobility', widget.mobility),
+                        _row(Icons.language_rounded, 'Language', widget.language),
+                      ],
+                    ),
+                    if (widget.instructions.trim().isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      _detailCard(
+                        title: 'Additional instructions',
+                        icon: Icons.notes_rounded,
+                        rows: [
+                          _row(Icons.notes_rounded, 'Notes', widget.instructions),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 16),
-
-                    _buildInstructionsCard(),
-
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: CareCircleColors.primaryLight,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.shield_outlined, color: CareCircleColors.primary),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              widget.familySharing
+                                  ? 'Family updates are enabled for this request.'
+                                  : 'Family updates are disabled for this request.',
+                              style: const TextStyle(
+                                color: CareCircleColors.primaryDark,
+                                height: 1.45,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 16),
-
-                    _buildFamilyUpdatesCard(),
-
-                    const SizedBox(height: 20),
-
-                    _buildMatchingInfoCard(),
+                    const Text(
+                      'Submitting this request saves it to the server. Helper matching will be handled in the next workflow step.',
+                      style: TextStyle(
+                        color: CareCircleColors.textSecondary,
+                        fontSize: 12,
+                        height: 1.45,
+                      ),
+                    ),
                   ],
                 ),
               ),
             ),
-
-            _buildBottomButton(context),
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 18),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 16,
+                    offset: const Offset(0, -4),
+                  ),
+                ],
+              ),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _isSubmitting ? null : _confirmRequest,
+                  icon: _isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.check_circle_outline_rounded),
+                  label: Text(_isSubmitting ? 'Submitting request...' : 'Confirm and submit request'),
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildProgressIndicator() {
+  Widget _progressIndicator() {
     return Row(
-      children: [
-        Expanded(
+      children: List.generate(
+        3,
+        (index) => Expanded(
           child: Container(
             height: 5,
+            margin: EdgeInsets.only(right: index == 2 ? 0 : 6),
             decoration: BoxDecoration(
               color: CareCircleColors.primary,
               borderRadius: BorderRadius.circular(10),
             ),
           ),
         ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Container(
-            height: 5,
-            decoration: BoxDecoration(
-              color: CareCircleColors.primary,
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Container(
-            height: 5,
-            decoration: BoxDecoration(
-              color: CareCircleColors.primary,
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
-  Widget _buildMainRequestCard() {
+  Widget _mainCard() {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [
-            CareCircleColors.primary,
-            CareCircleColors.primaryDark,
-          ],
+          colors: [CareCircleColors.primary, CareCircleColors.primaryDark],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(22),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: const Icon(
-                  Icons.volunteer_activism_rounded,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 13),
-              const Expanded(
-                child: Text(
-                  'Care request',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 18),
-
-          Text(
-            service,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 21,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-
-          const SizedBox(height: 7),
-
-          Text(
-            'For $elderlyName',
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-            ),
-          ),
-
-          const SizedBox(height: 18),
-
-          Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 10,
-            ),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.calendar_today_outlined,
-                  color: Colors.white,
-                  size: 17,
-                ),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: Text(
-                    '${_formatDate(date)} • ${_formatTime(time)}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCareLocationCard() {
-    return _sectionCard(
-      title: 'Care location',
-      icon: Icons.location_on_outlined,
-      child: Text(
-        address,
-        style: const TextStyle(
-          fontSize: 14,
-          height: 1.5,
-          color: CareCircleColors.textPrimary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSupportDetailsCard() {
-    return _sectionCard(
-      title: 'Support details',
-      icon: Icons.accessibility_new_outlined,
-      child: Column(
-        children: [
-          _detailRow(
-            Icons.schedule_outlined,
-            'Expected duration',
-            duration,
-          ),
+          const Icon(Icons.volunteer_activism_rounded, color: Colors.white, size: 28),
           const SizedBox(height: 14),
-          _detailRow(
-            Icons.accessibility_new_outlined,
-            'Mobility assistance',
-            mobility,
+          Text(
+            widget.service,
+            style: const TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w700),
           ),
-          const SizedBox(height: 14),
-          _detailRow(
-            Icons.language_outlined,
-            'Preferred helper language',
-            language,
+          const SizedBox(height: 6),
+          Text(
+            'For ${widget.elderlyName}',
+            style: const TextStyle(color: Colors.white70, fontSize: 14),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildInstructionsCard() {
-    return _sectionCard(
-      title: 'Additional instructions',
-      icon: Icons.notes_outlined,
-      child: Text(
-        instructions.isEmpty
-            ? 'No additional instructions provided.'
-            : instructions,
-        style: const TextStyle(
-          fontSize: 14,
-          height: 1.5,
-          color: CareCircleColors.textPrimary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFamilyUpdatesCard() {
-    return _sectionCard(
-      title: 'Family care updates',
-      icon: Icons.notifications_none_rounded,
-      child: Row(
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: familySharing
-                  ? CareCircleColors.primaryLight
-                  : CareCircleColors.border,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              familySharing
-                  ? Icons.notifications_active_outlined
-                  : Icons.notifications_off_outlined,
-              color: familySharing
-                  ? CareCircleColors.primary
-                  : CareCircleColors.textSecondary,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              familySharing
-                  ? 'You will receive updates about the helper and care progress.'
-                  : 'Family care updates are turned off for this request.',
-              style: const TextStyle(
-                fontSize: 13,
-                height: 1.4,
-                color: CareCircleColors.textSecondary,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMatchingInfoCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: CareCircleColors.primaryLight,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: CareCircleColors.primary.withValues(
-            alpha: 0.12,
-          ),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(
-            Icons.auto_awesome_outlined,
-            color: CareCircleColors.primary,
-            size: 23,
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'How CareCircle will match',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: CareCircleColors.textPrimary,
-                  ),
-                ),
-                SizedBox(height: 6),
-                Text(
-                  'We will look for a suitable verified helper based on location, availability, service skills, language and care requirements.',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.45,
-                    color: CareCircleColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _sectionCard({
+  Widget _detailCard({
     required String title,
     required IconData icon,
-    required Widget child,
+    required List<Widget> rows,
   }) {
     return Container(
       width: double.infinity,
@@ -464,114 +309,55 @@ class ReviewCareRequestScreen extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: CareCircleColors.border,
-        ),
+        border: Border.all(color: CareCircleColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: CareCircleColors.primaryLight,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  icon,
-                  color: CareCircleColors.primary,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 11),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: CareCircleColors.textPrimary,
-                ),
-              ),
+              Icon(icon, color: CareCircleColors.primary, size: 20),
+              const SizedBox(width: 9),
+              Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
             ],
           ),
-          const SizedBox(height: 15),
-          child,
+          const SizedBox(height: 16),
+          ..._withSpacing(rows),
         ],
       ),
     );
   }
 
-  Widget _detailRow(
-      IconData icon,
-      String label,
-      String value,
-      ) {
+  List<Widget> _withSpacing(List<Widget> children) {
+    final result = <Widget>[];
+    for (var index = 0; index < children.length; index++) {
+      if (index > 0) result.add(const SizedBox(height: 13));
+      result.add(children[index]);
+    }
+    return result;
+  }
+
+  Widget _row(IconData icon, String label, String value) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(
-          icon,
-          size: 19,
-          color: CareCircleColors.textSecondary,
-        ),
+        Icon(icon, size: 18, color: CareCircleColors.primary),
         const SizedBox(width: 10),
+        SizedBox(
+          width: 76,
+          child: Text(
+            label,
+            style: const TextStyle(color: CareCircleColors.textSecondary, fontSize: 13),
+          ),
+        ),
+        const SizedBox(width: 8),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  color: CareCircleColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                  color: CareCircleColors.textPrimary,
-                ),
-              ),
-            ],
+          child: Text(
+            value,
+            style: const TextStyle(color: CareCircleColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildBottomButton(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
-      child: ElevatedButton(
-        onPressed: () => _confirmRequest(context),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.search_rounded,
-              size: 20,
-            ),
-            SizedBox(width: 8),
-            Text('Confirm & find a helper'),
-          ],
-        ),
-      ),
     );
   }
 }
