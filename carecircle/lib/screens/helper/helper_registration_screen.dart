@@ -1,12 +1,12 @@
-
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../features/auth/data/auth_service.dart';
+import '../../features/helper/data/helper_service.dart';
+import '../../core/network/api_client.dart';
 
-/// ===============================================================
-/// HELPER REGISTRATION
-/// ===============================================================
-
+/// Helper onboarding screen. Account name and phone come from the signed-in
+/// account; this form saves the helper-specific profile through FastAPI.
 class HelperRegistrationScreen extends StatefulWidget {
   const HelperRegistrationScreen({super.key});
 
@@ -15,34 +15,22 @@ class HelperRegistrationScreen extends StatefulWidget {
       _HelperRegistrationScreenState();
 }
 
-class _HelperRegistrationScreenState
-    extends State<HelperRegistrationScreen> {
+class _HelperRegistrationScreenState extends State<HelperRegistrationScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _addressController = TextEditingController();
 
-  final _name = TextEditingController();
-  final _phone = TextEditingController();
-  final _address = TextEditingController();
-  final _emergencyName = TextEditingController();
-  final _emergencyPhone = TextEditingController();
-
-  final Set<String> _skills = {};
-  final Set<String> _languages = {'English'};
-
-  bool _available = true;
-  double _radius = 5;
-
-  static const _services = [
+  static const List<String> _serviceOptions = [
     'Grocery pickup',
     'Medicine pickup',
     'Appointment assistance',
-    'Hospital accompaniment',
+    'Accompaniment to hospital',
     'Household assistance',
-    'Document / bill assistance',
+    'Document/bill assistance',
     'Companionship',
     'Short walk assistance',
   ];
 
-  static const _languageOptions = [
+  static const List<String> _languageOptions = [
     'English',
     'Hindi',
     'Bengali',
@@ -52,51 +40,97 @@ class _HelperRegistrationScreenState
     'Other',
   ];
 
+  final Set<String> _selectedSkills = {};
+  final Set<String> _selectedLanguages = {'English'};
+  double _serviceRadius = 5;
+  bool _saving = false;
+
+  Map<String, dynamic>? get _account => AuthService.currentUser;
+
+  String get _helperName {
+    final name = _account?['full_name'];
+    return name is String && name.trim().isNotEmpty
+        ? name.trim()
+        : 'CareCircle helper';
+  }
+
+  String get _phone {
+    final phone = _account?['phone'];
+    return phone is String && phone.trim().isNotEmpty ? phone.trim() : '';
+  }
+
   @override
   void dispose() {
-    _name.dispose();
-    _phone.dispose();
-    _address.dispose();
-    _emergencyName.dispose();
-    _emergencyPhone.dispose();
+    _addressController.dispose();
     super.dispose();
   }
 
-  String? _required(String? value, String label) {
-    if (value == null || value.trim().isEmpty) {
-      return 'Please enter $label';
-    }
-    return null;
-  }
-
-  void _continue() {
+  Future<void> _saveAndContinue() async {
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
 
-    if (_skills.isEmpty || _languages.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Select at least one service and language.'),
-        ),
-      );
+    if (_selectedSkills.isEmpty || _selectedLanguages.isEmpty) {
+      _showMessage('Select at least one service and one language.');
       return;
     }
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => HelperVerificationScreen(
-          helperName: _name.text.trim(),
-          phone: _phone.text.trim(),
-          address: _address.text.trim(),
-          emergencyName: _emergencyName.text.trim(),
-          emergencyPhone: _emergencyPhone.text.trim(),
-          skills: _skills.toList(),
-          languages: _languages.toList(),
-          available: _available,
-          radius: _radius,
+    setState(() => _saving = true);
+
+    try {
+      final profile = await HelperService.saveProfile(
+        address: _addressController.text,
+        skills: _selectedSkills.toList()..sort(),
+        languages: _selectedLanguages.toList()..sort(),
+        serviceRadiusKm: _serviceRadius.round(),
+      );
+
+      if (!mounted) return;
+
+      final radiusValue = profile['service_radius_km'];
+      final radius = radiusValue is num ? radiusValue.toDouble() : _serviceRadius;
+      final skills = _split(profile['skills']);
+      final languages = _split(profile['languages']);
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => HelperDashboardScreen(
+            helperName: _helperName,
+            phone: _phone,
+            address: profile['address'] as String? ?? _addressController.text.trim(),
+            emergencyName: '',
+            emergencyPhone: '',
+            skills: skills,
+            languages: languages,
+            available: profile['is_available'] == true,
+            radius: radius,
+            verificationStatus:
+                profile['verification_status'] as String? ?? 'pending',
+          ),
         ),
-      ),
-    );
+      );
+    } on ApiException catch (error) {
+      _showMessage(error.message);
+    } catch (error) {
+      _showMessage('Could not save your helper profile. Please try again.');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  List<String> _split(dynamic value) {
+    if (value is! String || value.trim().isEmpty) return [];
+    return value
+        .split(',')
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -109,122 +143,85 @@ class _HelperRegistrationScreenState
           child: ListView(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
             children: [
-              const _HelperHeader(
+              _Header(
                 icon: Icons.volunteer_activism_rounded,
-                title: 'Join CareCircle',
+                title: 'Join CareCircle, $_helperName',
                 subtitle:
-                'Help older adults with everyday tasks and make a meaningful difference.',
+                    'Set up your helper profile so families can find support in their area.',
               ),
-              const SizedBox(height: 24),
-              const _SectionTitle('Personal details'),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: _name,
-                textCapitalization: TextCapitalization.words,
-                validator: (v) => _required(v, 'your full name'),
-                decoration: const InputDecoration(
-                  labelText: 'Full name',
-                  prefixIcon: Icon(Icons.person_outline),
-                ),
+              const SizedBox(height: 20),
+              _InfoCard(
+                icon: Icons.verified_user_outlined,
+                title: 'Your account details',
+                message: _phone.isEmpty
+                    ? 'Name: $_helperName. Your account phone number is not available. You can update it through your account settings.'
+                    : 'Name: $_helperName\nPhone: $_phone\nThese details come from the account you registered with.',
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 22),
+              const _SectionTitle('Home address'),
+              const SizedBox(height: 10),
               TextFormField(
-                controller: _phone,
-                keyboardType: TextInputType.phone,
-                maxLength: 10,
-                validator: (v) {
-                  if (v == null || !RegExp(r'^[6-9]\d{9}$').hasMatch(v)) {
-                    return 'Enter a valid 10-digit Indian mobile number';
+                controller: _addressController,
+                minLines: 2,
+                maxLines: 3,
+                textCapitalization: TextCapitalization.sentences,
+                validator: (value) {
+                  if (value == null || value.trim().length < 5) {
+                    return 'Enter an address with at least 5 characters.';
                   }
                   return null;
                 },
                 decoration: const InputDecoration(
-                  labelText: 'Mobile number',
-                  prefixText: '+91 ',
-                  prefixIcon: Icon(Icons.phone_outlined),
-                  counterText: '',
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: _address,
-                minLines: 2,
-                maxLines: 3,
-                validator: (v) => _required(v, 'your address'),
-                decoration: const InputDecoration(
-                  labelText: 'Home address',
+                  labelText: 'Your residential address',
+                  hintText: 'House/flat, street, area, city, PIN code',
                   alignLabelWithHint: true,
                   prefixIcon: Icon(Icons.location_on_outlined),
                 ),
               ),
-              const SizedBox(height: 26),
-              const _SectionTitle('Emergency contact'),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: _emergencyName,
-                textCapitalization: TextCapitalization.words,
-                validator: (v) => _required(v, 'an emergency contact name'),
-                decoration: const InputDecoration(
-                  labelText: 'Contact person',
-                  prefixIcon: Icon(Icons.contact_phone_outlined),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: _emergencyPhone,
-                keyboardType: TextInputType.phone,
-                maxLength: 10,
-                validator: (v) {
-                  if (v == null || !RegExp(r'^[6-9]\d{9}$').hasMatch(v)) {
-                    return 'Enter a valid 10-digit mobile number';
-                  }
-                  return null;
-                },
-                decoration: const InputDecoration(
-                  labelText: 'Emergency contact number',
-                  prefixText: '+91 ',
-                  prefixIcon: Icon(Icons.phone_in_talk_outlined),
-                  counterText: '',
-                ),
-              ),
-              const SizedBox(height: 26),
+              const SizedBox(height: 24),
               const _SectionTitle('Services you can provide'),
               const SizedBox(height: 6),
               const Text(
-                'Select every service you are comfortable providing.',
+                'Choose only the services you are comfortable and able to provide.',
                 style: TextStyle(color: CareCircleColors.textSecondary),
               ),
               const SizedBox(height: 12),
-              ..._services.map(
-                    (service) => _SelectionTile(
-                  title: service,
-                  selected: _skills.contains(service),
-                  onTap: () {
-                    setState(() {
-                      if (!_skills.add(service)) {
-                        _skills.remove(service);
-                      }
-                    });
-                  },
-                ),
-              ),
-              const SizedBox(height: 24),
+              ..._serviceOptions.map((service) {
+                final selected = _selectedSkills.contains(service);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _ChoiceTile(
+                    title: service,
+                    selected: selected,
+                    onTap: () {
+                      setState(() {
+                        if (selected) {
+                          _selectedSkills.remove(service);
+                        } else {
+                          _selectedSkills.add(service);
+                        }
+                      });
+                    },
+                  ),
+                );
+              }),
+              const SizedBox(height: 18),
               const _SectionTitle('Languages you speak'),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: _languageOptions.map((language) {
-                  final selected = _languages.contains(language);
+                  final selected = _selectedLanguages.contains(language);
                   return FilterChip(
                     label: Text(language),
                     selected: selected,
                     onSelected: (value) {
                       setState(() {
                         if (value) {
-                          _languages.add(language);
+                          _selectedLanguages.add(language);
                         } else {
-                          _languages.remove(language);
+                          _selectedLanguages.remove(language);
                         }
                       });
                     },
@@ -233,75 +230,46 @@ class _HelperRegistrationScreenState
                   );
                 }).toList(),
               ),
-              const SizedBox(height: 26),
-              const _SectionTitle('Availability and service area'),
+              const SizedBox(height: 24),
+              const _SectionTitle('Service area'),
               const SizedBox(height: 8),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _available,
-                activeColor: CareCircleColors.primary,
-                title: const Text(
-                  'Available for care requests',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: Text(
-                  _available
-                      ? 'You can receive demo request offers.'
-                      : 'You will not receive new demo offers.',
-                ),
-                onChanged: (value) => setState(() => _available = value),
-              ),
-              const SizedBox(height: 12),
               Text(
-                'Maximum travel distance: ${_radius.round()} km',
+                'Maximum travel distance: ${_serviceRadius.round()} km',
                 style: const TextStyle(
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                   color: CareCircleColors.textPrimary,
                 ),
               ),
               Slider(
-                value: _radius,
+                value: _serviceRadius,
                 min: 1,
                 max: 25,
                 divisions: 24,
-                label: '${_radius.round()} km',
+                label: '${_serviceRadius.round()} km',
                 activeColor: CareCircleColors.primary,
-                onChanged: (value) => setState(() => _radius = value),
+                onChanged: (value) => setState(() => _serviceRadius = value),
               ),
               const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: CareCircleColors.secondaryLight,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.info_outline_rounded,
-                      color: CareCircleColors.secondary,
-                    ),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Your details are currently kept in this demo flow. '
-                            'Secure account storage and verification will be '
-                            'connected to the backend later.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          height: 1.5,
-                          color: CareCircleColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              const _InfoCard(
+                icon: Icons.shield_outlined,
+                title: 'Verification comes first',
+                message:
+                    'Your profile will be saved with a pending verification status. You will not receive real care requests or be allowed to switch availability on until an authorised administrator verifies your account.',
               ),
               const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: _continue,
-                child: const Text('Continue to verification'),
+              ElevatedButton.icon(
+                onPressed: _saving ? null : _saveAndContinue,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label: Text(_saving ? 'Saving profile...' : 'Save helper profile'),
               ),
             ],
           ),
@@ -311,196 +279,8 @@ class _HelperRegistrationScreenState
   }
 }
 
-/// ===============================================================
-/// VERIFICATION CHECKLIST
-/// ===============================================================
-
-class HelperVerificationScreen extends StatefulWidget {
-  final String helperName;
-  final String phone;
-  final String address;
-  final String emergencyName;
-  final String emergencyPhone;
-  final List<String> skills;
-  final List<String> languages;
-  final bool available;
-  final double radius;
-
-  const HelperVerificationScreen({
-    super.key,
-    required this.helperName,
-    required this.phone,
-    required this.address,
-    required this.emergencyName,
-    required this.emergencyPhone,
-    required this.skills,
-    required this.languages,
-    required this.available,
-    required this.radius,
-  });
-
-  @override
-  State<HelperVerificationScreen> createState() =>
-      _HelperVerificationScreenState();
-}
-
-class _HelperVerificationScreenState
-    extends State<HelperVerificationScreen> {
-  final Set<int> _acknowledged = {};
-
-  static const _checks = [
-    (
-    'Identity document',
-    'Provide an approved identity document for secure review.',
-    Icons.badge_outlined,
-    ),
-    (
-    'Address verification',
-    'Confirm your current residential address.',
-    Icons.home_work_outlined,
-    ),
-    (
-    'Contact verification',
-    'Verify your mobile number using a one-time code.',
-    Icons.phonelink_lock_outlined,
-    ),
-    (
-    'References',
-    'Provide references when requested by the review team.',
-    Icons.people_outline_rounded,
-    ),
-    (
-    'Training and safety',
-    'Complete applicable care, privacy and safety training.',
-    Icons.health_and_safety_outlined,
-    ),
-  ];
-
-  void _openDashboard() {
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(
-        builder: (_) => HelperDashboardScreen(
-          helperName: widget.helperName,
-          phone: widget.phone,
-          address: widget.address,
-          emergencyName: widget.emergencyName,
-          emergencyPhone: widget.emergencyPhone,
-          skills: widget.skills,
-          languages: widget.languages,
-          available: widget.available,
-          radius: widget.radius,
-        ),
-      ),
-          (route) => false,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Helper verification')),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            const _HelperHeader(
-              icon: Icons.shield_outlined,
-              title: 'Build trust with families',
-              subtitle:
-              'Review the steps required before you can be approved for real care requests.',
-            ),
-            const SizedBox(height: 22),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: CareCircleColors.secondaryLight,
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: const Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.pending_actions_rounded,
-                    color: CareCircleColors.secondary,
-                  ),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Demo status: Verification pending. Checking a box '
-                          'acknowledges that you understand a requirement; '
-                          'it does not verify your identity or approve your account.',
-                      style: TextStyle(
-                        height: 1.45,
-                        color: CareCircleColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 22),
-            ...List.generate(_checks.length, (index) {
-              final check = _checks[index];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _card(
-                  child: CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: _acknowledged.contains(index),
-                    activeColor: CareCircleColors.primary,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    secondary: Icon(
-                      check.$3,
-                      color: CareCircleColors.primary,
-                    ),
-                    title: Text(
-                      check.$1,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    subtitle: Padding(
-                      padding: const EdgeInsets.only(top: 5),
-                      child: Text(check.$2),
-                    ),
-                    onChanged: (value) {
-                      setState(() {
-                        if (value == true) {
-                          _acknowledged.add(index);
-                        } else {
-                          _acknowledged.remove(index);
-                        }
-                      });
-                    },
-                  ),
-                ),
-              );
-            }),
-            const SizedBox(height: 8),
-            ElevatedButton(
-              onPressed: _openDashboard,
-              child: const Text('Continue to demo dashboard'),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'The dashboard is available for testing. Real requests must '
-                  'remain restricted until backend verification is complete.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12,
-                color: CareCircleColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// ===============================================================
-/// HELPER DASHBOARD
-/// ===============================================================
-
+/// Dashboard constructor is kept compatible with AuthNavigation.
+/// All helper profile and request data is loaded from the backend.
 class HelperDashboardScreen extends StatefulWidget {
   final String helperName;
   final String phone;
@@ -511,6 +291,7 @@ class HelperDashboardScreen extends StatefulWidget {
   final List<String> languages;
   final bool available;
   final double radius;
+  final String verificationStatus;
 
   const HelperDashboardScreen({
     super.key,
@@ -523,107 +304,124 @@ class HelperDashboardScreen extends StatefulWidget {
     required this.languages,
     required this.available,
     required this.radius,
+    this.verificationStatus = 'pending',
   });
 
   @override
-  State<HelperDashboardScreen> createState() =>
-      _HelperDashboardScreenState();
+  State<HelperDashboardScreen> createState() => _HelperDashboardScreenState();
 }
 
 class _HelperDashboardScreenState extends State<HelperDashboardScreen> {
-  late bool _available;
-  int _tab = 0;
-  final List<_CareJob> _history = [];
-  _CareJob? _activeJob;
+  int _selectedTab = 0;
+  bool _loading = true;
+  bool _changingAvailability = false;
+  String? _error;
+  Map<String, dynamic>? _profile;
+  List<Map<String, dynamic>> _offers = [];
+  List<Map<String, dynamic>> _myRequests = [];
+  List<Map<String, dynamic>> _completed = [];
+
+  String get _verificationStatus =>
+      (_profile?['verification_status'] as String? ??
+              widget.verificationStatus)
+          .toLowerCase();
+
+  bool get _isVerified => _verificationStatus == 'verified';
+  bool get _isAvailable => _profile?['is_available'] == true;
 
   @override
   void initState() {
     super.initState();
-    _available = widget.available;
+    _loadDashboard();
   }
 
-  static final List<_CareJob> _demoJobs = [
-    _CareJob(
-      id: 'CC-1042',
-      recipient: 'Mrs. Sen',
-      service: 'Medicine pickup',
-      address: 'Near Salt Lake, Kolkata',
-      date: 'Today',
-      time: '5:00 PM',
-      duration: '45 minutes',
-      instructions: 'Collect the prescribed medicine and keep the receipt.',
-      amount: 100,
-    ),
-    _CareJob(
-      id: 'CC-1043',
-      recipient: 'Mr. Das',
-      service: 'Grocery pickup',
-      address: 'New Town, Kolkata',
-      date: 'Tomorrow',
-      time: '11:30 AM',
-      duration: '1 hour',
-      instructions: 'Confirm the grocery list with the family before buying.',
-      amount: 100,
-    ),
-    _CareJob(
-      id: 'CC-1044',
-      recipient: 'Mrs. Roy',
-      service: 'Companionship',
-      address: 'Bidhannagar, Kolkata',
-      date: 'Tomorrow',
-      time: '4:00 PM',
-      duration: '1 hour',
-      instructions: 'Friendly conversation and a short indoor activity.',
-      amount: 100,
-    ),
-  ];
+  Future<void> _loadDashboard() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
 
-  void _openJob(_CareJob job) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => HelperJobOfferScreen(
-          job: job,
-          onAccept: () {
-            Navigator.pop(context);
-            setState(() => _activeJob = job);
-            _openTask(job);
-          },
-        ),
-      ),
-    );
+    try {
+      final results = await Future.wait<dynamic>([
+        HelperService.getProfile(),
+        HelperService.getOffers(),
+        HelperService.getMyRequests(),
+        HelperService.getCompletedRequests(),
+      ]);
+
+      if (!mounted) return;
+      setState(() {
+        _profile = results[0] as Map<String, dynamic>;
+        _offers = results[1] as List<Map<String, dynamic>>;
+        _myRequests = results[2] as List<Map<String, dynamic>>;
+        _completed = results[3] as List<Map<String, dynamic>>;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not load your helper dashboard. Please try again.';
+        _loading = false;
+      });
+    }
   }
 
-  void _openTask(_CareJob job) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => HelperTaskScreen(
-          job: job,
-          onComplete: () {
-            setState(() {
-              _history.insert(0, job);
-              _activeJob = null;
-            });
-            Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Demo task marked as completed.'),
-              ),
-            );
-          },
-        ),
-      ),
-    );
+  Future<void> _changeAvailability(bool value) async {
+    if (!_isVerified && value) {
+      _message('Your profile must be verified before you can become available.');
+      return;
+    }
+    if (_changingAvailability) return;
+
+    setState(() => _changingAvailability = true);
+    try {
+      final result = await HelperService.updateAvailability(value);
+      if (!mounted) return;
+      setState(() {
+        _profile = {
+          ...?_profile,
+          'is_available': result['is_available'] == true,
+        };
+        _changingAvailability = false;
+      });
+      _message(result['message'] as String? ?? 'Availability updated.');
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _changingAvailability = false);
+      _message(error.message);
+      await _loadDashboard();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _changingAvailability = false);
+      _message('Could not update availability. Please try again.');
+    }
+  }
+
+  void _message(String value) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(value)));
   }
 
   @override
   Widget build(BuildContext context) {
     final pages = [
-      _homePage(),
-      _requestsPage(),
-      _historyPage(),
-      _profilePage(),
+      _homeTab(),
+      _requestListTab('Incoming offers', _offers, emptyTitle: 'No offers yet',
+          emptyMessage: 'New offers assigned to your helper profile will appear here.'),
+      _requestListTab('My requests', _myRequests,
+          emptyTitle: 'No assigned requests',
+          emptyMessage: 'Requests you accept or are assigned to will appear here.'),
+      _profileTab(),
     ];
 
     return Scaffold(
@@ -631,21 +429,22 @@ class _HelperDashboardScreenState extends State<HelperDashboardScreen> {
         title: const Text('CareCircle Helper'),
         actions: [
           IconButton(
-            tooltip: 'Profile',
-            onPressed: () => setState(() => _tab = 3),
-            icon: const Icon(Icons.account_circle_outlined),
+            tooltip: 'Refresh',
+            onPressed: _loading ? null : _loadDashboard,
+            icon: const Icon(Icons.refresh_rounded),
           ),
         ],
       ),
       body: SafeArea(
-        child: IndexedStack(
-          index: _tab,
-          children: pages,
-        ),
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? _errorView()
+                : IndexedStack(index: _selectedTab, children: pages),
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (index) => setState(() => _tab = index),
+        selectedIndex: _selectedTab,
+        onDestinationSelected: (index) => setState(() => _selectedTab = index),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
@@ -655,14 +454,16 @@ class _HelperDashboardScreenState extends State<HelperDashboardScreen> {
           NavigationDestination(
             icon: Icon(Icons.inbox_outlined),
             selectedIcon: Icon(Icons.inbox_rounded),
-            label: 'Requests',
+            label: 'Offers',
           ),
           NavigationDestination(
-            icon: Icon(Icons.history_rounded),
-            label: 'History',
+            icon: Icon(Icons.assignment_outlined),
+            selectedIcon: Icon(Icons.assignment_rounded),
+            label: 'My requests',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline_rounded),
+            selectedIcon: Icon(Icons.person_rounded),
             label: 'Profile',
           ),
         ],
@@ -670,796 +471,160 @@ class _HelperDashboardScreenState extends State<HelperDashboardScreen> {
     );
   }
 
-  Widget _homePage() {
-    final visibleJobs = _demoJobs
-        .where((job) => widget.skills.contains(job.service))
-        .toList();
+  Widget _errorView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_outlined, size: 44,
+                color: CareCircleColors.textSecondary),
+            const SizedBox(height: 12),
+            Text(_error!, textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _loadDashboard,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try again'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [
-                CareCircleColors.primary,
-                CareCircleColors.primaryDark,
+  Widget _homeTab() {
+    return RefreshIndicator(
+      onRefresh: _loadDashboard,
+      child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [CareCircleColors.primary, CareCircleColors.primaryDark],
+              ),
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('HELPER DASHBOARD',
+                    style: TextStyle(color: Colors.white70, letterSpacing: 1.2,
+                        fontSize: 11, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 10),
+                Text('Hello, ${widget.helperName}!',
+                    style: const TextStyle(color: Colors.white, fontSize: 24,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Text(
+                  _isVerified
+                      ? 'Your verified helper account is ready.'
+                      : 'Your profile has been submitted for verification.',
+                  style: const TextStyle(color: Colors.white70, height: 1.4),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _isAvailable ? 'Available for requests' : 'Not available',
+                        style: const TextStyle(color: Colors.white,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    if (_changingAvailability)
+                      const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
+                    else
+                      Switch(
+                        value: _isAvailable,
+                        onChanged: _isVerified ? _changeAvailability : null,
+                        activeTrackColor: CareCircleColors.secondary,
+                      ),
+                  ],
+                ),
               ],
             ),
-            borderRadius: BorderRadius.circular(26),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'HELPER DASHBOARD',
-                style: TextStyle(
-                  color: Colors.white70,
-                  letterSpacing: 1.3,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'Hello, ${widget.helperName}!',
-                style: const TextStyle(
-                  fontSize: 25,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Your time and kindness can make someone’s day easier.',
-                style: TextStyle(
-                  color: Colors.white70,
-                  height: 1.45,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Icon(
-                    Icons.circle,
-                    size: 10,
-                    color: Colors.white,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _available ? 'Available for requests' : 'Currently unavailable',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
-                  Switch(
-                    value: _available,
-                    onChanged: (value) => setState(() => _available = value),
-                    activeTrackColor: CareCircleColors.secondary,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 18),
-        Row(
-          children: [
-            Expanded(
-              child: _statCard(
-                'Completed',
-                '${_history.length}',
-                Icons.task_alt_rounded,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _statCard(
-                'Demo earnings',
-                '₹${_history.fold<double>(0, (sum, job) => sum + job.amount).toStringAsFixed(0)}',
-                Icons.account_balance_wallet_outlined,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 26),
-        const _SectionTitle('Your next task'),
-        const SizedBox(height: 12),
-        if (_activeJob != null)
-          _jobCard(
-            _activeJob!,
-            buttonLabel: 'Continue task',
-            onPressed: () => _openTask(_activeJob!),
-          )
-        else
-          _emptyCard(
-            Icons.event_available_outlined,
-            'No active task',
-            'Accept a suitable request to see it here.',
-          ),
-        const SizedBox(height: 26),
-        const _SectionTitle('Matching demo requests'),
-        const SizedBox(height: 12),
-        if (!_available)
-          _emptyCard(
-            Icons.pause_circle_outline,
-            'You are unavailable',
-            'Turn on availability to browse demo requests.',
-          )
-        else if (visibleJobs.isEmpty)
-          _emptyCard(
-            Icons.search_off_rounded,
-            'No matching demo requests',
-            'Your selected service skills determine which sample offers appear.',
-          )
-        else
-          ...visibleJobs.map(
-                (job) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: _jobCard(
-                job,
-                buttonLabel: 'View request',
-                onPressed: () => _openJob(job),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _requestsPage() {
-    final jobs = _demoJobs
-        .where((job) => widget.skills.contains(job.service))
-        .toList();
-
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        const _SectionTitle('Available requests'),
-        const SizedBox(height: 8),
-        const Text(
-          'These are sample requests for testing, not real family bookings.',
-        ),
-        const SizedBox(height: 18),
-        if (!_available)
-          _emptyCard(
-            Icons.pause_circle_outline,
-            'Availability is off',
-            'Turn it on from Home to see demo offers.',
-          )
-        else if (jobs.isEmpty)
-          _emptyCard(
-            Icons.search_off_rounded,
-            'No matching offers',
-            'No sample requests match your selected skills.',
-          )
-        else
-          ...jobs.map(
-                (job) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: _jobCard(
-                job,
-                buttonLabel: 'View offer',
-                onPressed: () => _openJob(job),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _historyPage() {
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        const _SectionTitle('Care history'),
-        const SizedBox(height: 8),
-        const Text('Your completed demo tasks appear here.'),
-        const SizedBox(height: 18),
-        if (_history.isEmpty)
-          _emptyCard(
-            Icons.history_rounded,
-            'No completed tasks yet',
-            'Finish a demo task to see it in your history.',
-          )
-        else
-          ..._history.map(
-                (job) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: _card(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      job.service,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: CareCircleColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text('${job.recipient} • ${job.date}, ${job.time}'),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Demo earning: ₹${job.amount.toStringAsFixed(0)}',
-                      style: const TextStyle(
-                        color: CareCircleColors.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Row(
-                      children: [
-                        Icon(
-                          Icons.check_circle,
-                          size: 17,
-                          color: CareCircleColors.success,
-                        ),
-                        SizedBox(width: 6),
-                        Text('Marked completed in this demo'),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _profilePage() {
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        const _HelperHeader(
-          icon: Icons.account_circle_outlined,
-          title: 'Helper profile',
-          subtitle: 'Review the details entered during registration.',
-        ),
-        const SizedBox(height: 20),
-        _card(
-          child: Column(
-            children: [
-              _detailRow('Name', widget.helperName),
-              _detailRow('Phone', '+91 ${widget.phone}'),
-              _detailRow('Address', widget.address),
-              _detailRow('Emergency contact', widget.emergencyName),
-              _detailRow('Emergency phone', widget.emergencyPhone),
-              _detailRow('Languages', widget.languages.join(', ')),
-              _detailRow('Service radius', '${widget.radius.round()} km'),
-              _detailRow(
-                'Verification',
-                'Pending — not yet verified',
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 18),
-        _card(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Selected services',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: CareCircleColors.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ...widget.skills.map(
-                    (skill) => Padding(
-                  padding: const EdgeInsets.only(bottom: 9),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.check_circle_outline,
-                        size: 18,
-                        color: CareCircleColors.primary,
-                      ),
-                      const SizedBox(width: 9),
-                      Expanded(child: Text(skill)),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 18),
-        OutlinedButton.icon(
-          onPressed: () => setState(() => _tab = 0),
-          icon: const Icon(Icons.home_outlined),
-          label: const Text('Back to home'),
-        ),
-      ],
-    );
-  }
-
-  Widget _statCard(String title, String value, IconData icon) {
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: CareCircleColors.primary, size: 24),
-          const SizedBox(height: 15),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w700,
-              color: CareCircleColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(title, style: const TextStyle(fontSize: 12)),
-        ],
-      ),
-    );
-  }
-
-  Widget _jobCard(
-      _CareJob job, {
-        required String buttonLabel,
-        required VoidCallback onPressed,
-      }) {
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: CareCircleColors.primaryLight,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Icon(
-                  Icons.volunteer_activism_outlined,
-                  color: CareCircleColors.primary,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      job.service,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                        color: CareCircleColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      '${job.date} • ${job.time}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              Text(
-                '₹${job.amount}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: CareCircleColors.primary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          _detailRow('Recipient', job.recipient),
-          _detailRow('Area', job.address),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: onPressed,
-              child: Text(buttonLabel),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _emptyCard(IconData icon, String title, String message) {
-    return _card(
-      child: Column(
-        children: [
-          Icon(icon, size: 36, color: CareCircleColors.primary),
+          const SizedBox(height: 16),
+          _statusBanner(),
+          const SizedBox(height: 22),
+          const _SectionTitle('Your activity'),
           const SizedBox(height: 12),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 16,
-              color: CareCircleColors.textPrimary,
-            ),
+          Row(
+            children: [
+              Expanded(child: _StatCard(
+                title: 'Incoming offers', value: '${_offers.length}',
+                icon: Icons.inbox_outlined)),
+              const SizedBox(width: 10),
+              Expanded(child: _StatCard(
+                title: 'Active requests', value: '${_myRequests.length}',
+                icon: Icons.assignment_outlined)),
+              const SizedBox(width: 10),
+              Expanded(child: _StatCard(
+                title: 'Completed', value: '${_completed.length}',
+                icon: Icons.task_alt_rounded)),
+            ],
           ),
-          const SizedBox(height: 6),
-          Text(message, textAlign: TextAlign.center),
+          const SizedBox(height: 22),
+          const _SectionTitle('Recent activity'),
+          const SizedBox(height: 10),
+          if (_myRequests.isEmpty && _completed.isEmpty)
+            const _EmptyState(
+              icon: Icons.event_available_outlined,
+              title: 'Nothing here yet',
+              message: 'Your real assigned and completed care requests will appear here.',
+            )
+          else ...[
+            ..._myRequests.take(2).map((request) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _RequestCard(request: request),
+            )),
+            ..._completed.take(2).map((request) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _RequestCard(request: request),
+            )),
+          ],
         ],
       ),
     );
   }
-}
 
-/// ===============================================================
-/// CARE REQUEST OFFER
-/// ===============================================================
+  Widget _statusBanner() {
+    final title = _isVerified ? 'Profile verified' : 'Verification pending';
+    final message = _isVerified
+        ? 'Your account has been marked verified by the backend.'
+        : 'You can review your profile, but availability remains disabled until an administrator verifies your account.';
 
-class HelperJobOfferScreen extends StatelessWidget {
-  final _CareJob job;
-  final VoidCallback onAccept;
-
-  const HelperJobOfferScreen({
-    super.key,
-    required this.job,
-    required this.onAccept,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Care request offer')),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            const _HelperHeader(
-              icon: Icons.assignment_turned_in_outlined,
-              title: 'Review this request',
-              subtitle:
-              'Check the details carefully before accepting the demo task.',
-            ),
-            const SizedBox(height: 20),
-            _card(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    job.service,
-                    style: const TextStyle(
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                      color: CareCircleColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _detailRow('Request ID', job.id),
-                  _detailRow('Care recipient', job.recipient),
-                  _detailRow('Location', job.address),
-                  _detailRow('Date', job.date),
-                  _detailRow('Time', job.time),
-                  _detailRow('Estimated duration', job.duration),
-                  _detailRow(
-                    'Illustrative helper fee',
-                    '₹${job.amount}',
-                  ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'Instructions',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: CareCircleColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 7),
-                  Text(job.instructions),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: CareCircleColors.secondaryLight,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Text(
-                'This is sample data. The recipient, address, schedule and '
-                    'fee are illustrative and are not a real booking.',
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.45,
-                  color: CareCircleColors.textPrimary,
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: onAccept,
-              icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Accept demo request'),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Decline / go back'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// ===============================================================
-/// HELPER TASK TRACKING
-/// ===============================================================
-
-class HelperTaskScreen extends StatefulWidget {
-  final _CareJob job;
-  final VoidCallback onComplete;
-
-  const HelperTaskScreen({
-    super.key,
-    required this.job,
-    required this.onComplete,
-  });
-
-  @override
-  State<HelperTaskScreen> createState() => _HelperTaskScreenState();
-}
-
-class _HelperTaskScreenState extends State<HelperTaskScreen> {
-  int _step = 0;
-
-  static const _steps = [
-    'Request accepted',
-    'On the way',
-    'Arrived',
-    'Task started',
-    'Completed',
-  ];
-
-  void _advance() {
-    if (_step < _steps.length - 1) {
-      setState(() => _step++);
-    } else {
-      widget.onComplete();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final completed = _step == _steps.length - 1;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Care task'),
-        automaticallyImplyLeading: false,
-      ),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            _card(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(
-                    Icons.volunteer_activism_rounded,
-                    color: CareCircleColors.primary,
-                    size: 34,
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    widget.job.service,
-                    style: const TextStyle(
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                      color: CareCircleColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  _detailRow('Recipient', widget.job.recipient),
-                  _detailRow('Location', widget.job.address),
-                  _detailRow(
-                    'Schedule',
-                    '${widget.job.date}, ${widget.job.time}',
-                  ),
-                  _detailRow('Duration', widget.job.duration),
-                  _detailRow('Request ID', widget.job.id),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            const _SectionTitle('Task progress'),
-            const SizedBox(height: 16),
-            ...List.generate(_steps.length, (index) {
-              final isDone = index <= _step;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 18),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 34,
-                      height: 34,
-                      decoration: BoxDecoration(
-                        color: isDone
-                            ? CareCircleColors.primary
-                            : CareCircleColors.primaryLight,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        isDone ? Icons.check : Icons.circle_outlined,
-                        size: 18,
-                        color: isDone
-                            ? Colors.white
-                            : CareCircleColors.primary,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          _steps[index],
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: index == _step
-                                ? FontWeight.w700
-                                : FontWeight.w500,
-                            color: isDone
-                                ? CareCircleColors.textPrimary
-                                : CareCircleColors.textSecondary,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }),
-            if (_step == 2)
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: CareCircleColors.secondaryLight,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Text(
-                  'Arrival verification is a demo placeholder. A real app '
-                      'should verify a one-time code or another approved method '
-                      'before allowing the task to start.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.45,
-                    color: CareCircleColors.textPrimary,
-                  ),
-                ),
-              ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _advance,
-              child: Text(
-                completed ? 'Finish and save demo history' : _nextLabel(),
-              ),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Return to dashboard'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _nextLabel() {
-    switch (_step) {
-      case 0:
-        return 'Mark as on the way';
-      case 1:
-        return 'Mark as arrived';
-      case 2:
-        return 'Start task';
-      case 3:
-        return 'Mark task completed';
-      default:
-        return 'Finish';
-    }
-  }
-}
-
-/// ===============================================================
-/// REUSABLE UI AND DEMO DATA
-/// ===============================================================
-
-class _CareJob {
-  final String id;
-  final String recipient;
-  final String service;
-  final String address;
-  final String date;
-  final String time;
-  final String duration;
-  final String instructions;
-  final double amount;
-
-  const _CareJob({
-    required this.id,
-    required this.recipient,
-    required this.service,
-    required this.address,
-    required this.date,
-    required this.time,
-    required this.duration,
-    required this.instructions,
-    required this.amount,
-  });
-}
-
-class _HelperHeader extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  const _HelperHeader({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: CareCircleColors.primaryLight,
-        borderRadius: BorderRadius.circular(22),
+        color: _isVerified ? CareCircleColors.primaryLight : CareCircleColors.secondaryLight,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: CareCircleColors.border),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Icon(
-              icon,
-              color: CareCircleColors.primary,
-              size: 27,
-            ),
-          ),
-          const SizedBox(width: 14),
+          Icon(_isVerified ? Icons.verified_rounded : Icons.pending_actions_rounded,
+              color: CareCircleColors.primary),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: CareCircleColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 7),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    height: 1.5,
-                    color: CareCircleColors.textSecondary,
-                  ),
-                ),
+                Text(title, style: const TextStyle(fontWeight: FontWeight.w700,
+                    color: CareCircleColors.textPrimary)),
+                const SizedBox(height: 5),
+                Text(message, style: const TextStyle(height: 1.4,
+                    color: CareCircleColors.textSecondary)),
               ],
             ),
           ),
@@ -1467,131 +632,311 @@ class _HelperHeader extends StatelessWidget {
       ),
     );
   }
-}
 
-class _SectionTitle extends StatelessWidget {
-  final String title;
-
-  const _SectionTitle(this.title);
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      title,
-      style: const TextStyle(
-        fontSize: 18,
-        fontWeight: FontWeight.w700,
-        color: CareCircleColors.textPrimary,
+  Widget _requestListTab(
+    String title,
+    List<Map<String, dynamic>> requests, {
+    required String emptyTitle,
+    required String emptyMessage,
+  }) {
+    return RefreshIndicator(
+      onRefresh: _loadDashboard,
+      child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          _SectionTitle(title),
+          const SizedBox(height: 14),
+          if (requests.isEmpty)
+            _EmptyState(
+              icon: Icons.inbox_outlined,
+              title: emptyTitle,
+              message: emptyMessage,
+            )
+          else
+            ...requests.map((request) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _RequestCard(request: request),
+            )),
+        ],
       ),
     );
   }
-}
 
-class _SelectionTile extends StatelessWidget {
-  final String title;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _SelectionTile({
-    required this.title,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: selected ? CareCircleColors.primaryLight : Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(15),
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 14,
-              vertical: 13,
-            ),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(
-                color: selected
-                    ? CareCircleColors.primary
-                    : CareCircleColors.border,
-              ),
-            ),
-            child: Row(
+  Widget _profileTab() {
+    final profile = _profile ?? <String, dynamic>{};
+    return RefreshIndicator(
+      onRefresh: _loadDashboard,
+      child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          const _SectionTitle('Helper profile'),
+          const SizedBox(height: 14),
+          _Panel(
+            child: Column(
               children: [
-                Icon(
-                  selected
-                      ? Icons.check_circle_rounded
-                      : Icons.circle_outlined,
-                  color: selected
-                      ? CareCircleColors.primary
-                      : CareCircleColors.textSecondary,
-                ),
-                const SizedBox(width: 11),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: CareCircleColors.textPrimary,
-                    ),
-                  ),
-                ),
+                _DetailRow(label: 'Name', value: widget.helperName),
+                _DetailRow(label: 'Phone', value: widget.phone.isEmpty ? 'Not provided' : widget.phone),
+                _DetailRow(label: 'Address', value: profile['address'] as String? ?? widget.address),
+                _DetailRow(label: 'Languages', value: profile['languages'] as String? ?? widget.languages.join(', ')),
+                _DetailRow(label: 'Service radius', value: '${profile['service_radius_km'] ?? widget.radius.round()} km'),
+                _DetailRow(label: 'Verification', value: _verificationStatus),
+                _DetailRow(label: 'Availability', value: _isAvailable ? 'Available' : 'Unavailable'),
               ],
             ),
           ),
-        ),
+          const SizedBox(height: 16),
+          const _SectionTitle('Services selected'),
+          const SizedBox(height: 10),
+          _Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: _split(profile['skills'] ?? widget.skills.join(', '))
+                  .map((skill) => Padding(
+                    padding: const EdgeInsets.only(bottom: 9),
+                    child: Row(children: [
+                      const Icon(Icons.check_circle_outline, size: 18,
+                          color: CareCircleColors.primary),
+                      const SizedBox(width: 9),
+                      Expanded(child: Text(skill)),
+                    ]),
+                  )).toList(),
+            ),
+          ),
+        ],
       ),
+    );
+  }
+
+  List<String> _split(dynamic value) {
+    if (value is! String || value.trim().isEmpty) return [];
+    return value.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+  }
+}
+
+class _RequestCard extends StatelessWidget {
+  final Map<String, dynamic> request;
+  const _RequestCard({required this.request});
+
+  @override
+  Widget build(BuildContext context) {
+    final id = request['id']?.toString() ?? '—';
+    final status = request['status']?.toString().replaceAll('_', ' ') ?? 'unknown';
+    final name = request['elderly_name']?.toString() ?? 'Care recipient';
+    final service = request['service']?.toString() ?? 'Care service';
+    final address = request['address']?.toString() ?? '';
+    final date = request['scheduled_date']?.toString() ?? '';
+    final time = request['scheduled_time']?.toString() ?? '';
+
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(service, style: const TextStyle(
+                  fontWeight: FontWeight.w700, fontSize: 16,
+                  color: CareCircleColors.textPrimary))),
+              _StatusPill(status: status),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+          if (address.isNotEmpty) ...[
+            const SizedBox(height: 5),
+            Text(address, style: const TextStyle(color: CareCircleColors.textSecondary)),
+          ],
+          const SizedBox(height: 8),
+          Text('Request #$id  •  $date  •  ${_shortTime(time)}',
+              style: const TextStyle(fontSize: 12, color: CareCircleColors.textSecondary)),
+        ],
+      ),
+    );
+  }
+
+  String _shortTime(String value) => value.length >= 5 ? value.substring(0, 5) : value;
+}
+
+class _StatusPill extends StatelessWidget {
+  final String status;
+  const _StatusPill({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: CareCircleColors.primaryLight,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(status, style: const TextStyle(fontSize: 11,
+          fontWeight: FontWeight.w700, color: CareCircleColors.primaryDark)),
     );
   }
 }
 
-Widget _card({required Widget child}) {
-  return Container(
+class _StatCard extends StatelessWidget {
+  final String title;
+  final String value;
+  final IconData icon;
+  const _StatCard({required this.title, required this.value, required this.icon});
+
+  @override
+  Widget build(BuildContext context) => _Panel(
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, color: CareCircleColors.primary, size: 21),
+      const SizedBox(height: 10),
+      Text(value, style: const TextStyle(fontSize: 22,
+          fontWeight: FontWeight.w700, color: CareCircleColors.textPrimary)),
+      const SizedBox(height: 3),
+      Text(title, style: const TextStyle(fontSize: 11,
+          color: CareCircleColors.textSecondary)),
+    ]),
+  );
+}
+
+class _EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String message;
+  const _EmptyState({required this.icon, required this.title, required this.message});
+
+  @override
+  Widget build(BuildContext context) => _Panel(
+    child: Column(children: [
+      Icon(icon, size: 38, color: CareCircleColors.primary),
+      const SizedBox(height: 10),
+      Text(title, style: const TextStyle(fontWeight: FontWeight.w700,
+          color: CareCircleColors.textPrimary)),
+      const SizedBox(height: 6),
+      Text(message, textAlign: TextAlign.center,
+          style: const TextStyle(height: 1.4, color: CareCircleColors.textSecondary)),
+    ]),
+  );
+}
+
+class _Panel extends StatelessWidget {
+  final Widget child;
+  const _Panel({required this.child});
+
+  @override
+  Widget build(BuildContext context) => Container(
     width: double.infinity,
-    padding: const EdgeInsets.all(18),
+    padding: const EdgeInsets.all(17),
     decoration: BoxDecoration(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(18),
       border: Border.all(color: CareCircleColors.border),
     ),
     child: child,
   );
 }
 
-Widget _detailRow(String label, String value) {
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 11),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 112,
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 12,
-              color: CareCircleColors.textSecondary,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: CareCircleColors.textPrimary,
-            ),
-          ),
-        ),
-      ],
+class _Header extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _Header({required this.icon, required this.title, required this.subtitle});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(19),
+    decoration: BoxDecoration(color: CareCircleColors.primaryLight,
+        borderRadius: BorderRadius.circular(21)),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(width: 48, height: 48,
+          decoration: BoxDecoration(color: Colors.white,
+              borderRadius: BorderRadius.circular(15)),
+          child: Icon(icon, color: CareCircleColors.primary, size: 25)),
+      const SizedBox(width: 13),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700,
+            color: CareCircleColors.textPrimary)),
+        const SizedBox(height: 6),
+        Text(subtitle, style: const TextStyle(height: 1.45,
+            color: CareCircleColors.textSecondary)),
+      ])),
+    ]),
+  );
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String title;
+  const _SectionTitle(this.title);
+  @override
+  Widget build(BuildContext context) => Text(title,
+      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700,
+          color: CareCircleColors.textPrimary));
+}
+
+class _ChoiceTile extends StatelessWidget {
+  final String title;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ChoiceTile({required this.title, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: selected ? CareCircleColors.primaryLight : Colors.white,
+    borderRadius: BorderRadius.circular(14),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: selected
+                ? CareCircleColors.primary : CareCircleColors.border)),
+        child: Row(children: [
+          Icon(selected ? Icons.check_circle : Icons.circle_outlined,
+              color: selected ? CareCircleColors.primary : CareCircleColors.textSecondary),
+          const SizedBox(width: 10),
+          Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w600,
+              color: CareCircleColors.textPrimary))),
+        ]),
+      ),
     ),
+  );
+}
+
+class _InfoCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String message;
+  const _InfoCard({required this.icon, required this.title, required this.message});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(15),
+    decoration: BoxDecoration(color: CareCircleColors.secondaryLight,
+        borderRadius: BorderRadius.circular(16)),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, color: CareCircleColors.secondary),
+      const SizedBox(width: 10),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: const TextStyle(fontWeight: FontWeight.w700,
+            color: CareCircleColors.textPrimary)),
+        const SizedBox(height: 5),
+        Text(message, style: const TextStyle(fontSize: 12, height: 1.45,
+            color: CareCircleColors.textPrimary)),
+      ])),
+    ]),
+  );
+}
+
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  const _DetailRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(width: 105, child: Text(label,
+          style: const TextStyle(fontSize: 12, color: CareCircleColors.textSecondary))),
+      const SizedBox(width: 8),
+      Expanded(child: Text(value, style: const TextStyle(fontSize: 13,
+          fontWeight: FontWeight.w600, color: CareCircleColors.textPrimary))),
+    ]),
   );
 }

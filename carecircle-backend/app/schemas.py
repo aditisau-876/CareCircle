@@ -1,8 +1,8 @@
-
 from datetime import date, datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, EmailStr
+
 
 CareService = Literal[
     "Grocery pickup",
@@ -152,6 +152,26 @@ class HelperProfileRead(BaseModel):
 
 class HelperAssignmentRequest(BaseModel):
     helper_profile_id: int = Field(gt=0)
+
+
+class FindHelpersResponse(BaseModel):
+    request_id: int
+    request_status: str
+    offers_created: int
+    message: str
+
+
+class HelperOfferRead(CareRequestRead):
+    offer_id: int
+    offer_status: str
+    distance_km: float
+    expires_at: datetime
+
+
+class HelperOfferActionRead(BaseModel):
+    offer_id: int
+    offer_status: str
+    message: str
 
 
 class CareStatusEventRead(BaseModel):
